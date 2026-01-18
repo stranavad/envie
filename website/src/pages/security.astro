@@ -1,0 +1,14 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Navigation from '@/components/landing/Navigation.vue';
+import SecurityPage from '@/components/landing/SecurityPage.vue';
+import Footer from '@/components/landing/Footer.vue';
+---
+
+<Layout title="Security - Envie | Zero-Trust Architecture">
+	<Navigation client:load />
+	<main>
+		<SecurityPage client:load />
+	</main>
+	<Footer client:load />
+</Layout>

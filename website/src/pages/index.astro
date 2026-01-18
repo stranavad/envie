@@ -1,0 +1,18 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Navigation from '@/components/landing/Navigation.vue';
+import Hero from '@/components/landing/Hero.vue';
+import Features from '@/components/landing/Features.vue';
+import Security from '@/components/landing/Security.vue';
+import Footer from '@/components/landing/Footer.vue';
+---
+
+<Layout title="Envie - Zero-Trust Secret Manager | End-to-End Encrypted">
+	<Navigation client:load />
+	<main>
+		<Hero client:load />
+		<Features client:visible />
+		<Security client:visible />
+	</main>
+	<Footer client:load />
+</Layout>

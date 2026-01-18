@@ -1,0 +1,14 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Navigation from '@/components/landing/Navigation.vue';
+import FeaturesPage from '@/components/landing/FeaturesPage.vue';
+import Footer from '@/components/landing/Footer.vue';
+---
+
+<Layout title="Features - Envie | Zero-Trust Secret Manager">
+	<Navigation client:load />
+	<main>
+		<FeaturesPage client:load />
+	</main>
+	<Footer client:load />
+</Layout>

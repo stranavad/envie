@@ -58,14 +58,19 @@ export const useAuthStore = defineStore('auth', () => {
      * Exchange a linking code for access and refresh tokens
      * devicePublicKey is optional - will be registered after vault setup
      */
+    // Store the last exchange error for the UI to display
+    const lastExchangeError = ref<string | null>(null);
+
     async function exchangeLinkingCode(code: string, devicePublicKey?: string): Promise<boolean> {
+        lastExchangeError.value = null;
+
         try {
             const body: Record<string, string> = { code: code.trim() };
             if (devicePublicKey) {
                 body.devicePublicKey = devicePublicKey;
             }
 
-            const response = await window.fetch(`${config.backendUrl}/auth/exchange`, {
+            const response = await fetch(`${config.backendUrl}/auth/exchange`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -74,8 +79,9 @@ export const useAuthStore = defineStore('auth', () => {
             });
 
             if (!response.ok) {
-                const error = await response.json();
+                const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
                 console.error('Exchange failed:', error);
+                lastExchangeError.value = error.error || `Server error: ${response.status}`;
                 return false;
             }
 
@@ -97,8 +103,9 @@ export const useAuthStore = defineStore('auth', () => {
             }
 
             return true;
-        } catch (e) {
+        } catch (e: any) {
             console.error("Failed to exchange linking code", e);
+            lastExchangeError.value = e.message || 'Network error - could not reach server';
             return false;
         }
     }
@@ -129,7 +136,7 @@ export const useAuthStore = defineStore('auth', () => {
                     return false;
                 }
 
-                const response = await window.fetch(`${config.backendUrl}/auth/refresh`, {
+                const response = await fetch(`${config.backendUrl}/auth/refresh`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -213,7 +220,7 @@ export const useAuthStore = defineStore('auth', () => {
         try {
             if (accessToken.value) {
                 // Try to revoke tokens on backend
-                await window.fetch(`${config.backendUrl}/auth/logout`, {
+                await fetch(`${config.backendUrl}/auth/logout`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${accessToken.value}`
@@ -253,7 +260,7 @@ export const useAuthStore = defineStore('auth', () => {
         if (!validToken) return;
 
         try {
-            const response = await window.fetch(`${config.backendUrl}/me`, {
+            const response = await fetch(`${config.backendUrl}/me`, {
                 headers: {
                     'Authorization': `Bearer ${validToken}`
                 }
@@ -385,7 +392,7 @@ export const useAuthStore = defineStore('auth', () => {
 
         // Legacy: try as direct JWT token (for backwards compatibility during transition)
         try {
-            const response = await window.fetch(`${config.backendUrl}/me`, {
+            const response = await fetch(`${config.backendUrl}/me`, {
                 headers: {
                     'Authorization': `Bearer ${linkingCode}`
                 }
@@ -413,6 +420,7 @@ export const useAuthStore = defineStore('auth', () => {
         isRefreshing,
         knownMasterKeyVersion,
         masterKeyVersionMismatch,
+        lastExchangeError,
 
         // Computed
         isAuthenticated,

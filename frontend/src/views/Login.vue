@@ -131,7 +131,8 @@ const handleVerify = async () => {
     if (success) {
         emit('success');
     } else {
-        error.value = "Invalid or expired linking code. Please try again.";
+        // Show actual error from the store if available
+        error.value = auth.lastExchangeError || "Invalid or expired linking code. Please try again.";
     }
     isVerifying.value = false;
 };

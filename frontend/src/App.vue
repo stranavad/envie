@@ -86,8 +86,13 @@ function onIdentityCompleted() {
 }
 
 // Called after successful login to reset the failed state
-function onLoginSuccess() {
+async function onLoginSuccess() {
     sessionRestoreFailed.value = false;
+
+    // Initialize vault for newly logged in user
+    if (auth.user?.id && vault.status !== 'unlocked') {
+        await initVaultForUser();
+    }
 }
 
 

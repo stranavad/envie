@@ -66,7 +66,7 @@ func AuthCallback(c *gin.Context) {
 			Email:     githubUser.Email,
 			AvatarURL: githubUser.AvatarURL,
 			GithubID:  githubUser.ID,
-			PublicKey: publicKey,
+			PublicKey: nil,
 		}
 
 		if user.Name == "" {
@@ -84,10 +84,6 @@ func AuthCallback(c *gin.Context) {
 
 		if user.Name == "" {
 			user.Name = githubUser.Login
-		}
-
-		if publicKey != "" {
-			user.PublicKey = publicKey
 		}
 
 		database.DB.Save(&user)
@@ -133,12 +129,13 @@ type ExchangeResponse struct {
 	RefreshToken string `json:"refreshToken"`
 	ExpiresIn    int    `json:"expiresIn"`
 	User         struct {
-		ID        uuid.UUID `json:"id"`
-		Name      string    `json:"name"`
-		Email     string    `json:"email"`
-		AvatarURL string    `json:"avatarUrl"`
-		GithubID  int64     `json:"githubId"`
-		PublicKey string    `json:"publicKey"`
+		ID               uuid.UUID `json:"id"`
+		Name             string    `json:"name"`
+		Email            string    `json:"email"`
+		AvatarURL        string    `json:"avatarUrl"`
+		GithubID         int64     `json:"githubId"`
+		PublicKey        *string   `json:"publicKey"`
+		MasterKeyVersion int       `json:"masterKeyVersion"`
 	} `json:"user"`
 }
 
@@ -180,10 +177,6 @@ func AuthExchange(c *gin.Context) {
 		return
 	}
 
-	if req.DevicePublicKey != "" && req.DevicePublicKey != user.PublicKey {
-		user.PublicKey = req.DevicePublicKey
-		database.DB.Save(&user)
-	}
 
 	var deviceID *uuid.UUID
 	if req.DevicePublicKey != "" {
@@ -230,6 +223,7 @@ func AuthExchange(c *gin.Context) {
 	response.User.AvatarURL = user.AvatarURL
 	response.User.GithubID = user.GithubID
 	response.User.PublicKey = user.PublicKey
+	response.User.MasterKeyVersion = user.MasterKeyVersion
 
 	c.JSON(http.StatusOK, response)
 }

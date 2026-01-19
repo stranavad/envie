@@ -2,9 +2,12 @@ package middleware
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"envie-backend/internal/auth"
+	"envie-backend/internal/database"
+	"envie-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,6 +40,12 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 
 		c.Set("user_id", claims.UserID)
+
+		var user models.User
+		if err := database.DB.Select("master_key_version").First(&user, "id = ?", claims.UserID).Error; err == nil {
+			c.Header("X-Master-Key-Version", strconv.Itoa(user.MasterKeyVersion))
+		}
+
 		c.Next()
 	}
 }

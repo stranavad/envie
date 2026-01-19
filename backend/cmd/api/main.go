@@ -34,6 +34,7 @@ func main() {
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+		c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Master-Key-Version")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -59,6 +60,8 @@ func main() {
 	authorized.Use(middleware.AuthMiddleware())
 	{
 		authorized.GET("/me", handlers.GetMe)
+		authorized.PUT("/me/public-key", handlers.SetPublicKey)
+		authorized.POST("/me/rotate-master-key", handlers.RotateMasterKey)
 		authorized.POST("/auth/logout", handlers.AuthLogout)
 
 		// Identity

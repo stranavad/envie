@@ -63,7 +63,7 @@ func GetDevices(c *gin.Context) {
 	userID := userIdContext.(uuid.UUID)
 
 	var devices []models.UserIdentity
-	if err := database.DB.Where("user_id = ?", userID).Find(&devices).Error; err != nil {
+	if err := database.DB.Preload("User").Where("user_id = ?", userID).Find(&devices).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch devices"})
 		return
 	}

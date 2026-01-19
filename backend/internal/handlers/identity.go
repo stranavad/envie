@@ -33,7 +33,7 @@ func RegisterDevice(c *gin.Context) {
 
 
 	var existing models.UserIdentity
-	if result := database.DB.Where("user_id = ? AND public_key = ?", userID, req.PublicKey).First(&existing); result.Error == nil {
+	if result := database.DB.Preload("User").Where("user_id = ? AND public_key = ?", userID, req.PublicKey).First(&existing); result.Error == nil {
 		c.JSON(http.StatusOK, existing)
 		return
 	}
@@ -50,6 +50,8 @@ func RegisterDevice(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register device"})
 		return
 	}
+
+	database.DB.Preload("User").First(&device, "id = ?", device.ID)
 
 	c.JSON(http.StatusCreated, device)
 }
@@ -137,6 +139,8 @@ func UpdateDevice(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update device"})
 		return
 	}
+
+	database.DB.Preload("User").First(&device, "id = ?", device.ID)
 
 	c.JSON(http.StatusOK, device)
 }

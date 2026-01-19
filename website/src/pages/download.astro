@@ -1,0 +1,14 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Navigation from '@/components/landing/Navigation.vue';
+import DownloadPage from '@/components/landing/DownloadPage.vue';
+import Footer from '@/components/landing/Footer.vue';
+---
+
+<Layout title="Download - Envie | Zero-Trust Secret Manager">
+	<Navigation client:load />
+	<main>
+		<DownloadPage client:load />
+	</main>
+	<Footer client:load />
+</Layout>

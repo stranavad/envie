@@ -13,6 +13,7 @@ import { AlignRight, Github } from 'lucide-vue-next'
 const links = [
   { name: 'Features', href: '/features' },
   { name: 'Security', href: '/security' },
+  { name: 'Download', href: '/download' },
 ]
 
 const githubUrl = 'https://github.com/stranavad/envie'

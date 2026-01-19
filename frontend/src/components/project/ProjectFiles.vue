@@ -204,8 +204,6 @@ async function handleDownload(file: ProjectFile) {
 }
 
 async function handleDelete(file: ProjectFile) {
-    if (!confirm(`Are you sure you want to delete "${file.name}"?`)) return;
-
     try {
         await ProjectService.deleteFile(props.project.id, file.id);
         await loadFiles();

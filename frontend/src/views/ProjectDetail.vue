@@ -12,14 +12,13 @@ import ProjectAccess from '@/components/project/ProjectAccess.vue';
 import ProjectFiles from '@/components/project/ProjectFiles.vue';
 import { EncryptionService } from '@/services/encryption.service';
 import { TeamService } from '@/services/team.service';
-import { useVaultStore } from '@/stores/vault';
+import { IdentityService } from '@/services/identity.service';
 import { useOrganizationStore } from '@/stores/organization';
 
 const route = useRoute();
 const router = useRouter();
 const projectId = route.params.id as string;
 
-const vaultStore = useVaultStore();
 const orgStore = useOrganizationStore();
 
 const project = ref<ProjectDetail | null>(null);
@@ -67,8 +66,10 @@ async function decryptProjectKey() {
     decryptionError.value = '';
 
     try {
-        if (!vaultStore.privateKey) {
-            throw new Error('Vault is locked. Please unlock your vault first.');
+        // Use Master Identity private key for decryption (not device vault key)
+        const masterKeyPair = IdentityService.getMasterKeyPair();
+        if (!masterKeyPair) {
+            throw new Error('Master Identity not loaded. Please unlock your vault first.');
         }
 
         let teamKey = '';
@@ -77,7 +78,7 @@ async function decryptProjectKey() {
         if (project.value.encryptedTeamKey) {
             console.log('Decrypting team key via user\'s encrypted team key');
             teamKey = await EncryptionService.decryptKey(
-                vaultStore.privateKey,
+                masterKeyPair.privateKey,
                 project.value.encryptedTeamKey
             );
         }

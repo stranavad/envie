@@ -136,8 +136,6 @@ async function handleAddMember(userId: string, role: string) {
 }
 
 async function handleRemoveMember(teamId: string, userId: string) {
-    if (!confirm('Are you sure you want to remove this member from the team?')) return;
-
     try {
         await TeamService.removeTeamMember(teamId, userId);
         await loadTeamMembers(teamId);

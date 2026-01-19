@@ -6,7 +6,8 @@ export interface User {
     email: string;
     avatarUrl: string;
     githubId: number;
-    publicKey: string;
+    publicKey: string | null; // null until first device setup
+    masterKeyVersion: number; // for detecting key rotation on other devices
 }
 
 export interface TokenResponse {
@@ -26,7 +27,21 @@ export interface RefreshTokenRequest {
 }
 
 export interface UpdatePublicKeyRequest {
-    public_key: string;
+    publicKey: string;
+}
+
+export interface RotateMasterKeyRequest {
+    newPublicKey: string;
+    identityKeys: Record<string, string>; // identityId -> encrypted master key
+    teamKeys: Record<string, string>; // teamId -> encrypted team key
+}
+
+export interface RotateMasterKeyResponse {
+    message: string;
+    publicKey: string;
+    masterKeyVersion: number;
+    identitiesUpdated: number;
+    teamsUpdated: number;
 }
 
 /**
@@ -84,18 +99,41 @@ export class AuthService {
         return response.json();
     }
 
-    static async updatePublicKey(accessToken: string, publicKey: string): Promise<void> {
+    static async updatePublicKey(accessToken: string, publicKey: string): Promise<{publicKey: string}> {
         const response = await fetch(`${config.backendUrl}/me/public-key`, {
             method: 'PUT',
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ public_key: publicKey }),
+            body: JSON.stringify({ publicKey }),
         });
 
         if (!response.ok) {
             throw new Error('Failed to update public key');
         }
+
+        return response.json()
+    }
+
+    static async rotateMasterKey(
+        accessToken: string,
+        request: RotateMasterKeyRequest
+    ): Promise<RotateMasterKeyResponse> {
+        const response = await fetch(`${config.backendUrl}/me/rotate-master-key`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(request),
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: response.statusText }));
+            throw new Error(error.error || 'Failed to rotate master key');
+        }
+
+        return response.json();
     }
 }

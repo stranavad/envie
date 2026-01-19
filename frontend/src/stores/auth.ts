@@ -3,6 +3,7 @@ import {computed, ref} from 'vue';
 import {openUrl} from '@tauri-apps/plugin-opener';
 import {config} from '../config';
 import {useVaultStore} from './vault';
+import { AuthService, RotateMasterKeyRequest } from '@/services/auth.service';
 
 interface User {
     id: string;
@@ -10,7 +11,8 @@ interface User {
     email: string;
     avatarUrl: string;
     githubId: number;
-    publicKey: string;
+    publicKey: string | null;
+    masterKeyVersion: number;
 }
 
 interface TokenResponse {
@@ -25,12 +27,17 @@ export const useAuthStore = defineStore('auth', () => {
     const tokenExpiresAt = ref<number | null>(null);
     const user = ref<User | null>(null);
     const isRefreshing = ref(false);
+    const knownMasterKeyVersion = ref<number | null>(null);
+    const masterKeyVersionMismatch = ref(false);
 
     // Pending refresh token to be saved to vault once vault is unlocked
     let pendingRefreshToken: string | null = null;
 
     // Queue of pending requests waiting for token refresh
     let refreshPromise: Promise<boolean> | null = null;
+
+    // Callback for when master key version changes (key was rotated on another device)
+    let onMasterKeyVersionChange: (() => void) | null = null;
 
     const isAuthenticated = computed(() => !!accessToken.value && !!user.value);
 
@@ -253,6 +260,9 @@ export const useAuthStore = defineStore('auth', () => {
             });
 
             if (response.ok) {
+                // Check master key version from header
+                checkMasterKeyVersion(response);
+
                 user.value = await response.json();
             } else if (response.status === 401) {
                 // Token invalid even after refresh - logout
@@ -264,43 +274,105 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     /**
+     * Check master key version from response header and trigger callback if changed
+     */
+    function checkMasterKeyVersion(response: Response) {
+      const versionHeader = response.headers.get('X-Master-Key-Version');
+      if (!versionHeader) {
+        return
+      }
+
+      const serverVersion = parseInt(versionHeader, 10);
+
+      if (isNaN(serverVersion)) {
+        return
+      }
+
+      if (knownMasterKeyVersion.value !== null && serverVersion > knownMasterKeyVersion.value) {
+          // Key was rotated on another device
+          masterKeyVersionMismatch.value = true;
+          if (onMasterKeyVersionChange) {
+              onMasterKeyVersionChange();
+          }
+      }
+
+      knownMasterKeyVersion.value = serverVersion;
+    }
+
+    /**
+     * Set callback for when master key version changes (key rotated on another device)
+     */
+    function setOnMasterKeyVersionChange(callback: (() => void) | null) {
+        onMasterKeyVersionChange = callback;
+    }
+
+    /**
+     * Clear the master key version mismatch flag (after user has handled it)
+     */
+    function clearMasterKeyVersionMismatch() {
+        masterKeyVersionMismatch.value = false;
+    }
+
+    /**
      * Persist any pending refresh token to vault (call after vault is unlocked)
      */
     async function persistPendingRefreshToken() {
         if (!pendingRefreshToken) return;
 
         const vaultStore = useVaultStore();
-        if (vaultStore.status === 'unlocked') {
-            try {
-                await vaultStore.saveRefreshToken(pendingRefreshToken);
-                pendingRefreshToken = null;
-            } catch (e) {
-                console.error("Failed to persist refresh token to vault", e);
-            }
+        if (vaultStore.status !== 'unlocked') return;
+
+        try {
+            await vaultStore.saveRefreshToken(pendingRefreshToken);
+            pendingRefreshToken = null;
+        } catch (e) {
+            console.error("Failed to persist refresh token to vault", e);
         }
     }
 
-    async function updatePublicKey(publicKey: string) {
+
+    async function setMasterPublicKey(masterPublicKey: string) {
         const validToken = await getValidToken();
         if (!validToken) return;
 
         try {
-            const response = await window.fetch(`${config.backendUrl}/me/public-key`, {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Bearer ${validToken}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ public_key: publicKey })
-            });
+            const responseData = await AuthService.updatePublicKey(validToken, masterPublicKey)
 
-            if (!response.ok) {
-                console.error('Failed to sync public key');
+            if (user.value) {
+                user.value.publicKey = responseData.publicKey;
             }
         } catch (e) {
-            console.error("Failed to update public key", e);
+            console.error("Failed to set master public key", e);
         }
     }
+
+    /**
+     * Rotate the master key - updates public key, identity keys, and team keys atomically
+     */
+    async function rotateMasterKey(request: RotateMasterKeyRequest): Promise<boolean> {
+        const validToken = await getValidToken();
+        if (!validToken) {
+            throw new Error('Not authenticated');
+        }
+
+        try {
+            const response = await AuthService.rotateMasterKey(validToken, request);
+
+            // Update local state
+            if (user.value) {
+                user.value.publicKey = response.publicKey;
+                user.value.masterKeyVersion = response.masterKeyVersion;
+            }
+            knownMasterKeyVersion.value = response.masterKeyVersion;
+            masterKeyVersionMismatch.value = false;
+
+            return true;
+        } catch (e) {
+            console.error("Failed to rotate master key", e);
+            throw e;
+        }
+    }
+
 
     // Legacy method - now exchanges linking code instead of verifying JWT directly
     async function verifyToken(linkingCode: string, devicePublicKey?: string) {
@@ -339,6 +411,8 @@ export const useAuthStore = defineStore('auth', () => {
         tokenExpiresAt,
         user,
         isRefreshing,
+        knownMasterKeyVersion,
+        masterKeyVersionMismatch,
 
         // Computed
         isAuthenticated,
@@ -349,13 +423,17 @@ export const useAuthStore = defineStore('auth', () => {
         logout,
         fetchUser,
         verifyToken,
-        updatePublicKey,
+        setMasterPublicKey,
+        rotateMasterKey,
         exchangeLinkingCode,
         refreshAccessToken,
         getValidToken,
         tryRestoreSession,
         clearAuth,
-        persistPendingRefreshToken
+        persistPendingRefreshToken,
+        setOnMasterKeyVersionChange,
+        clearMasterKeyVersionMismatch,
+        checkMasterKeyVersion
     };
 }, {
     persist: {

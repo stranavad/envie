@@ -12,20 +12,33 @@ import {
 } from '@/components/ui/card'
 import { useAuthStore } from '../stores/auth';
 import { useVaultStore } from '../stores/vault';
-import { LogOut, Trash2, Copy, Check } from 'lucide-vue-next';
+import { LogOut, Trash2, Copy, Check, AlertTriangle, RefreshCw } from 'lucide-vue-next';
 import { IdentityService } from "@/services/identity.service.ts";
 import { EncryptionService } from "@/services/encryption.service.ts";
-import { TeamService } from "@/services/team.service";
+import { TeamService } from "@/services/team.service.ts";
+import { DeviceService } from "@/services/device.service.ts";
+import type { RotateMasterKeyRequest } from "@/services/auth.service.ts";
+import { x25519 } from '@noble/curves/ed25519.js';
 
 const auth = useAuthStore();
 const vaultStore = useVaultStore();
 const router = useRouter();
 
-const publicKey = computed(() => vaultStore.publicKey);
+// Display the Master Identity public key (used for team encryption), not the device vault key
+const publicKey = computed(() => {
+    const masterKeyPair = IdentityService.getMasterKeyPair();
+    return masterKeyPair?.publicKey || '';
+});
 const isLoading = ref(false);
 const rotationStatus = ref('');
 const error = ref('');
 const copiedPublic = ref(false);
+
+// Key rotation modal state
+const showRotationModal = ref(false);
+const newRecoveryPhrase = ref('');
+const copiedPhrase = ref(false);
+const phraseConfirmed = ref(false);
 
 async function generateKeys() {
     isLoading.value = true;
@@ -33,62 +46,116 @@ async function generateKeys() {
     rotationStatus.value = '';
 
     try {
-        // 1. Get all teams the user is a member of
+        const oldMasterKeyPair = IdentityService.getMasterKeyPair();
+        if (!oldMasterKeyPair) {
+            throw new Error('Master Identity not loaded');
+        }
+
+        // 1. Generate new recovery phrase and derive new master key
+        rotationStatus.value = 'Generating new recovery phrase...';
+        const newPhrase = IdentityService.generateRecoveryPhrase();
+        const newMasterKey = await IdentityService.deriveMasterKey(newPhrase);
+
+        // Get new keypair from the new master key
+        const newPrivateBytes = atob(newMasterKey);
+        const newPrivateArray = Uint8Array.from(newPrivateBytes, c => c.charCodeAt(0));
+        const newPublicBytes = x25519.getPublicKey(newPrivateArray);
+        const newPublicKey = btoa(String.fromCharCode(...newPublicBytes));
+
+        // 2. Fetch all approved devices/identities
+        rotationStatus.value = 'Fetching devices...';
+        const devices = await DeviceService.getDevices();
+        const approvedDevices = devices.filter(d => d.encryptedMasterKey);
+
+        if (approvedDevices.length === 0) {
+            throw new Error('No approved devices found. Cannot rotate keys.');
+        }
+
+        // 3. Fetch all teams
         rotationStatus.value = 'Fetching team memberships...';
         const teams = await TeamService.getMyTeams();
 
-        // 2. Decrypt all team keys with current private key
-        rotationStatus.value = `Decrypting ${teams.length} team keys...`;
+        // 4. Decrypt all team keys with old master private key
+        rotationStatus.value = `Processing ${teams.length} team keys...`;
         const decryptedTeamKeys: { teamId: string; teamKey: string }[] = [];
 
         for (const team of teams) {
-            if (team.encryptedTeamKey) {
-                try {
-                    const teamKey = await EncryptionService.decryptKey(
-                        vaultStore.privateKey!,
-                        team.encryptedTeamKey
-                    );
-                    decryptedTeamKeys.push({ teamId: team.teamId, teamKey });
-                } catch (e) {
-                    console.warn(`Failed to decrypt team key for ${team.teamName}:`, e);
-                }
+            try {
+                const teamKey = await EncryptionService.decryptKey(
+                    oldMasterKeyPair.privateKey,
+                    team.encryptedTeamKey
+                );
+                decryptedTeamKeys.push({ teamId: team.teamId, teamKey });
+            } catch (e) {
+                console.warn(`Failed to decrypt team key for ${team.teamName}:`, e);
+                throw new Error(`Failed to decrypt team key for "${team.teamName}". Key rotation aborted.`);
             }
         }
 
-        // 3. Generate new key pair
-        rotationStatus.value = 'Generating new key pair...';
-        await vaultStore.rotateKeys();
-
-        // 4. Re-encrypt all team keys with new public key
-        rotationStatus.value = `Re-encrypting ${decryptedTeamKeys.length} team keys...`;
+        // 5. Re-encrypt team keys with new master public key
+        rotationStatus.value = 'Re-encrypting team keys...';
+        const newTeamKeys: Record<string, string> = {};
         for (const { teamId, teamKey } of decryptedTeamKeys) {
-            const newEncryptedTeamKey = await EncryptionService.encryptKey(
-                vaultStore.publicKey!,
-                teamKey
-            );
-
-            // 5. Save re-encrypted team key to backend
-            await TeamService.updateMyTeamKey(teamId, {
-                encryptedTeamKey: newEncryptedTeamKey
-            });
+            const encrypted = await EncryptionService.encryptKey(newPublicKey, teamKey);
+            newTeamKeys[teamId] = encrypted;
         }
 
-        // 6. Sync new public key to backend
-        rotationStatus.value = 'Syncing new public key...';
-        if (vaultStore.publicKey) {
-            await auth.updatePublicKey(vaultStore.publicKey);
+        // 6. Encrypt new master private key for each device
+        rotationStatus.value = 'Encrypting keys for devices...';
+        const newIdentityKeys: Record<string, string> = {};
+        for (const device of approvedDevices) {
+            // Encrypt the new master key with each device's public key
+            const encrypted = await EncryptionService.encryptKey(device.publicKey, newMasterKey);
+            newIdentityKeys[device.id] = encrypted;
         }
 
-        rotationStatus.value = 'Key rotation complete!';
-        setTimeout(() => { rotationStatus.value = ''; }, 3000);
+        // 7. Send rotation request to backend
+        rotationStatus.value = 'Updating keys on server...';
+        const request: RotateMasterKeyRequest = {
+            newPublicKey: newPublicKey,
+            identityKeys: newIdentityKeys,
+            teamKeys: newTeamKeys
+        };
+
+        await auth.rotateMasterKey(request);
+
+        // 8. Update local master key in memory
+        IdentityService.setMasterKey(newMasterKey);
+
+        // 9. Save new master key to vault (encrypted with device vault key)
+        if (vaultStore.status === 'unlocked') {
+            await vaultStore.saveMasterKey(newMasterKey);
+        }
+
+        // 10. Show the new recovery phrase to user
+        newRecoveryPhrase.value = newPhrase;
+        showRotationModal.value = true;
+        rotationStatus.value = 'Key rotation complete! Please save your new recovery phrase.';
 
     } catch (err: any) {
         console.error(err);
-        error.value = err.toString();
+        error.value = err.message || err.toString();
         rotationStatus.value = '';
     } finally {
         isLoading.value = false;
     }
+}
+
+async function copyRecoveryPhrase() {
+    try {
+        await navigator.clipboard.writeText(newRecoveryPhrase.value);
+        copiedPhrase.value = true;
+        setTimeout(() => copiedPhrase.value = false, 2000);
+    } catch (err) {
+        console.error('Failed to copy recovery phrase', err);
+    }
+}
+
+function closeRotationModal() {
+    showRotationModal.value = false;
+    newRecoveryPhrase.value = '';
+    phraseConfirmed.value = false;
+    rotationStatus.value = '';
 }
 
 async function copyToClipboard(text: string) {
@@ -126,10 +193,6 @@ async function handleLogout() {
 }
 
 async function handleDeleteData() {
-    if(!confirm("Are you sure? This will delete your local vault, keys, and log you out. This action cannot be undone.")) {
-        return;
-    }
-
     isLoading.value = true;
     error.value = '';
     try {
@@ -214,15 +277,65 @@ onCreated()
                     </div>
 
                     <div class="pt-2">
-                        <Button @click="generateKeys" :disabled="isLoading">
-                            {{ isLoading ? 'Rotating...' : 'Regenerate Key Pair' }}
+                        <Button @click="generateKeys" :disabled="isLoading" variant="outline">
+                            <RefreshCw v-if="!isLoading" class="w-4 h-4 mr-2" />
+                            {{ isLoading ? 'Rotating Keys...' : 'Rotate Master Key' }}
                         </Button>
                         <p class="text-xs text-muted-foreground mt-2">
-                            This will re-encrypt all your team keys with the new key pair.
+                            Generates a new recovery phrase and re-encrypts all your team keys.
+                            <br>
+                            <span class="text-amber-500">You will need to write down the new recovery phrase.</span>
                         </p>
                     </div>
                 </CardContent>
             </Card>
+
+            <!-- Recovery Phrase Modal -->
+            <div v-if="showRotationModal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+                <Card class="w-full max-w-lg mx-4">
+                    <CardHeader>
+                        <div class="flex items-center gap-2 text-amber-500">
+                            <AlertTriangle class="w-5 h-5" />
+                            <CardTitle>New Recovery Phrase</CardTitle>
+                        </div>
+                        <CardDescription>
+                            Your master key has been rotated. Write down this new recovery phrase and store it safely.
+                            <span class="font-bold text-destructive">You will not see this again!</span>
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent class="space-y-4">
+                        <div class="bg-muted p-4 rounded-lg">
+                            <div class="font-mono text-lg leading-relaxed select-all">
+                                {{ newRecoveryPhrase }}
+                            </div>
+                        </div>
+
+                        <div class="flex gap-2">
+                            <Button @click="copyRecoveryPhrase" variant="outline" class="flex-1">
+                                <Check v-if="copiedPhrase" class="w-4 h-4 mr-2 text-green-500" />
+                                <Copy v-else class="w-4 h-4 mr-2" />
+                                {{ copiedPhrase ? 'Copied!' : 'Copy Phrase' }}
+                            </Button>
+                        </div>
+
+                        <div class="flex items-start gap-2">
+                            <input
+                                type="checkbox"
+                                id="confirmPhrase"
+                                v-model="phraseConfirmed"
+                                class="mt-1"
+                            />
+                            <label for="confirmPhrase" class="text-sm text-muted-foreground">
+                                I have written down my recovery phrase and stored it in a safe place.
+                            </label>
+                        </div>
+
+                        <Button @click="closeRotationModal" class="w-full" :variant="phraseConfirmed ? 'default' : 'outline'">
+                            {{ phraseConfirmed ? 'Done' : 'Close (Not Recommended)' }}
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
 
             <!-- Danger Zone Card -->
             <Card class="border-destructive/50">

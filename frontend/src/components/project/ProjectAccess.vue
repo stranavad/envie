@@ -8,8 +8,8 @@ import { Users, Plus, Shield, ChevronDown, ChevronRight, Loader2 } from 'lucide-
 import { ProjectService, type ProjectDetail, type ProjectAccessData } from '@/services/project.service';
 import { TeamService } from '@/services/team.service';
 import { EncryptionService } from '@/services/encryption.service';
+import { IdentityService } from '@/services/identity.service';
 import { useOrganizationStore } from '@/stores/organization';
-import { useVaultStore } from '@/stores/vault';
 
 const props = defineProps<{
     project: ProjectDetail;
@@ -17,7 +17,6 @@ const props = defineProps<{
 }>();
 
 const orgStore = useOrganizationStore();
-const vaultStore = useVaultStore();
 
 const accessData = ref<ProjectAccessData | null>(null);
 const isLoading = ref(false);
@@ -65,9 +64,14 @@ async function handleAddTeam() {
 
         let teamKey = '';
 
+        const masterKeyPair = IdentityService.getMasterKeyPair();
+        if (!masterKeyPair) {
+            throw new Error('Master Identity not loaded');
+        }
+
         // Try to decrypt team key via user's encrypted team key
-        if (team.userEncryptedKey && vaultStore.privateKey) {
-            teamKey = await EncryptionService.decryptKey(vaultStore.privateKey, team.userEncryptedKey);
+        if (team.userEncryptedKey) {
+            teamKey = await EncryptionService.decryptKey(masterKeyPair.privateKey, team.userEncryptedKey);
         }
 
         // Fallback: Use org key

@@ -7,9 +7,12 @@ import {useAuthStore} from "./stores/auth";
 import VaultSetup from "@/components/VaultSetup.vue";
 import VaultUnlock from "@/components/VaultUnlock.vue";
 import { useVaultStore } from "@/stores/vault";
-import { ref, watch, computed } from "vue";
+import { ref, watch, computed, onMounted, onUnmounted } from "vue";
 import { IdentityService } from "@/services/identity.service";
+import { DeviceService } from "@/services/device.service"
+import {EncryptionService} from '@/services/encryption.service'
 import { Sonner } from "@/components/ui/sonner";
+import { toast } from "vue-sonner";
 
 const auth = useAuthStore();
 const vault = useVaultStore();
@@ -17,12 +20,15 @@ const vault = useVaultStore();
 const isInitializing = ref(true);
 const isRestoringSession = ref(false);
 const sessionRestoreFailed = ref(false);
+const showKeyRotationAlert = ref(false);
+const identityReady = ref(false);
 
 // Check if vault has identity (keypair)
 const hasKeypair = computed(() => !!vault.publicKey && !!vault.privateKey);
 
 // Check if master identity key is loaded in memory
-const hasIdentityInMemory = computed(() => !!IdentityService.getMasterKey());
+// Note: IdentityService uses static property, so we also check identityReady flag for reactivity
+const hasIdentityInMemory = computed(() => identityReady.value || !!IdentityService.getMasterKey());
 
 // Check if we have a persisted user (returning user scenario)
 const hasPersistedUser = computed(() => !!auth.user?.id);
@@ -55,25 +61,16 @@ async function initVaultForUser() {
 // Watch for vault unlock to restore session or sync data
 watch(() => vault.status, async (newStatus) => {
     if (newStatus === 'unlocked') {
-        // If we have tokens already, just sync
+        // If we have tokens already, just persist pending refresh token
         if (auth.isAuthenticated) {
             await auth.persistPendingRefreshToken();
-            if (vault.publicKey) {
-                auth.updatePublicKey(vault.publicKey);
-            }
         } else if (hasPersistedUser.value && !sessionRestoreFailed.value) {
             // Try to restore session using refresh token from vault
             isRestoringSession.value = true;
             const success = await auth.tryRestoreSession();
             isRestoringSession.value = false;
 
-            if (success) {
-                // Session restored! Sync public key
-                if (vault.publicKey) {
-                    auth.updatePublicKey(vault.publicKey);
-                }
-            } else {
-                // Refresh token invalid/expired - need to re-login
+            if (!success) {
                 sessionRestoreFailed.value = true;
             }
         }
@@ -81,10 +78,10 @@ watch(() => vault.status, async (newStatus) => {
 });
 
 function onIdentityCompleted() {
-    // Identity setup completed - keys are now in vault
-    // Sync public key to backend
-    if (vault.publicKey) {
-        auth.updatePublicKey(vault.publicKey);
+    identityReady.value = true;
+    const masterKeyPair = IdentityService.getMasterKeyPair();
+    if (masterKeyPair) {
+        auth.setMasterPublicKey(masterKeyPair.publicKey);
     }
 }
 
@@ -92,6 +89,59 @@ function onIdentityCompleted() {
 function onLoginSuccess() {
     sessionRestoreFailed.value = false;
 }
+
+
+function handleMasterKeyVersionChange() {
+    showKeyRotationAlert.value = true;
+    toast.warning('Your master key was rotated on another device', {
+        description: 'Please reload your keys to continue using the app.',
+        duration: Infinity,
+        action: {
+            label: 'Reload Keys',
+            onClick: () => reloadKeys()
+        }
+    });
+}
+// Reload keys after master key rotation on another device
+async function reloadKeys() {
+    showKeyRotationAlert.value = false;
+    auth.clearMasterKeyVersionMismatch();
+    await auth.fetchUser();
+
+    if (vault.status !== 'unlocked') {
+        return;
+    }
+
+    try {
+        const devices = await DeviceService.getDevices();
+        const currentDevice = devices.find(d => d.publicKey === vault.publicKey);
+
+        if (!currentDevice?.encryptedMasterKey) {
+            toast.error('Could not find your device. Please log out and log back in.');
+            return;
+        }
+
+        const newMasterKey = await EncryptionService.decryptKey(
+            vault.privateKey!,
+            currentDevice.encryptedMasterKey
+        );
+
+        IdentityService.setMasterKey(newMasterKey);
+        await vault.saveMasterKey(newMasterKey);
+        toast.success('Keys reloaded successfully');
+    } catch (e) {
+        console.error('Failed to reload keys:', e);
+        toast.error('Failed to reload keys. Please log out and log back in.');
+    }
+}
+
+onMounted(() => {
+    auth.setOnMasterKeyVersionChange(handleMasterKeyVersionChange);
+});
+
+onUnmounted(() => {
+    auth.setOnMasterKeyVersionChange(null);
+});
 
 // Initialize
 async function init() {
@@ -111,6 +161,15 @@ init();
 <template>
   <Sonner />
   <div class="font-sans antialiased text-foreground bg-background min-h-screen">
+      <!-- Key Rotation Alert Banner -->
+      <div v-if="showKeyRotationAlert" class="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-center">
+          <span class="text-amber-500 text-sm">
+              Your master key was rotated on another device.
+              <button @click="reloadKeys" class="underline font-medium ml-2 hover:text-amber-400">
+                  Reload Keys
+              </button>
+          </span>
+      </div>
       <!-- 0. Initializing -->
       <div v-if="isInitializing" class="flex items-center justify-center h-screen">
           <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>

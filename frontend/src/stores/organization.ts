@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { EncryptionService } from "@/services/encryption.service";
-import { useVaultStore } from "@/stores/vault";
 import { useAuthStore } from "@/stores/auth";
+import { IdentityService } from "@/services/identity.service";
 import { OrganizationService, type OrganizationListItem, type OrganizationDetail } from "@/services/organization.service";
 import { TeamService, type TeamListItem } from "@/services/team.service";
 import { ProjectService } from "@/services/project.service";
@@ -10,7 +10,6 @@ import { ProjectService } from "@/services/project.service";
 export type Organization = OrganizationListItem;
 
 export const useOrganizationStore = defineStore('organization', () => {
-    const vaultStore = useVaultStore();
     const authStore = useAuthStore();
 
     const organizations = ref<Organization[]>([]);
@@ -27,13 +26,15 @@ export const useOrganizationStore = defineStore('organization', () => {
 
     async function createOrganization(name: string) {
         if (!authStore.user) throw new Error("User not authenticated");
-        if (!vaultStore.publicKey) throw new Error("Vault not unlocked");
+
+        const masterKeyPair = IdentityService.getMasterKeyPair();
+        if (!masterKeyPair) throw new Error("Master Identity not loaded");
 
         // 1. Generate Org Master Key
         const orgMasterKey = EncryptionService.generateAesKey();
 
-        // 2. Encrypt for Self (Asymmetric)
-        const encryptedOrgKey = await EncryptionService.encryptKey(vaultStore.publicKey, orgMasterKey);
+        // 2. Encrypt for Self (Asymmetric) - using Master Identity public key
+        const encryptedOrgKey = await EncryptionService.encryptKey(masterKeyPair.publicKey, orgMasterKey);
 
         // 3. Generate General Team Key
         const teamKey = EncryptionService.generateAesKey();
@@ -41,8 +42,8 @@ export const useOrganizationStore = defineStore('organization', () => {
         // 4. Encrypt Team Key with Org Master Key (Symmetric)
         const generalTeamEncryptedKey = await EncryptionService.encryptValue(orgMasterKey, teamKey);
 
-        // 5. Encrypt Team Key with Self Public Key (Asymmetric)
-        const generalTeamUserEncryptedKey = await EncryptionService.encryptKey(vaultStore.publicKey, teamKey);
+        // 5. Encrypt Team Key with Self Public Key (Asymmetric) - using Master Identity public key
+        const generalTeamUserEncryptedKey = await EncryptionService.encryptKey(masterKeyPair.publicKey, teamKey);
 
         const org = await OrganizationService.createOrganization({
             name,
@@ -86,10 +87,12 @@ export const useOrganizationStore = defineStore('organization', () => {
             return null;
         }
 
-        if (!vaultStore.privateKey) throw new Error("Vault locked");
+        // Use Master Identity private key for decryption (not device vault key)
+        const masterKeyPair = IdentityService.getMasterKeyPair();
+        if (!masterKeyPair) throw new Error("Master Identity not loaded");
 
         try {
-            const key = await EncryptionService.decryptKey(vaultStore.privateKey, encryptedKey);
+            const key = await EncryptionService.decryptKey(masterKeyPair.privateKey, encryptedKey);
             orgMasterKeys.value[orgId] = key;
             return key;
         } catch (e) {
@@ -112,11 +115,15 @@ export const useOrganizationStore = defineStore('organization', () => {
         // 1. Generate Team Key
         const teamKey = EncryptionService.generateAesKey();
 
+        // Use Master Identity public key for encrypting team key (not device vault key)
+        const masterKeyPair = IdentityService.getMasterKeyPair();
+        if (!masterKeyPair) throw new Error("Master Identity not loaded");
+
         // 2. Encrypt with Org Key (Symmetric)
         const encryptedKey = await EncryptionService.encryptValue(orgKey, teamKey);
 
-        // 3. Encrypt with Self Public Key (Asymmetric)
-        const userEncryptedKey = await EncryptionService.encryptKey(vaultStore.publicKey!, teamKey);
+        // 3. Encrypt with Self Public Key (Asymmetric) - using Master Identity public key
+        const userEncryptedKey = await EncryptionService.encryptKey(masterKeyPair.publicKey, teamKey);
 
         const team = await TeamService.createTeam({
             name,
@@ -137,10 +144,13 @@ export const useOrganizationStore = defineStore('organization', () => {
         let teamKey = "";
 
         // Strategy A: Use User-Specific Team Key (Preferred, works for all members)
+        // Use Master Identity private key for decryption (not device vault key)
+        const masterKeyPair = IdentityService.getMasterKeyPair();
+        if (!masterKeyPair) throw new Error("Master Identity not loaded");
+
         if (team.userEncryptedKey) {
-            if (!vaultStore.privateKey) throw new Error("Vault locked");
             try {
-                teamKey = await EncryptionService.decryptKey(vaultStore.privateKey, team.userEncryptedKey);
+                teamKey = await EncryptionService.decryptKey(masterKeyPair.privateKey, team.userEncryptedKey);
             } catch (e) {
                 console.error("Failed to decrypt team key from userEncryptedKey", e);
             }

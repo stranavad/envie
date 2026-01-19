@@ -145,10 +145,6 @@ async function submitRecovery() {
 
 // ============ CASE C: Destructive Reset ============
 async function startDestructiveReset() {
-    if (!confirm("This will DELETE ALL your existing devices and create a new identity. You will lose access to all previously encrypted data. Are you sure?")) {
-        return;
-    }
-
     isLoading.value = true;
     error.value = '';
 

@@ -13,6 +13,7 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
+    "build:linux": "NO_STRIP=true npm run tauri build",
     "tauri": "tauri"
   },
   "dependencies": {

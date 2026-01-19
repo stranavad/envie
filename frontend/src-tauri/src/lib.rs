@@ -1,47 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use tauri::{Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
-use walkdir::WalkDir;
 
-#[tauri::command]
-fn scan_for_configs() -> Vec<String> {
-    let mut files = Vec::new();
-    let path = "/Users/davidstranava/programming";
-    for entry in WalkDir::new(path)
-        .into_iter()
-        .filter_entry(|e| {
-            !e.file_name()
-                .to_string_lossy()
-                .eq_ignore_ascii_case("node_modules")
-        })
-        .filter_map(|e| e.ok())
-    {
-        let file_name = entry.file_name().to_string_lossy();
-        if file_name == ".env" || file_name == "config.local.yaml" {
-            files.push(entry.path().to_string_lossy().to_string());
-        }
-    }
-    files
-}
-
-#[tauri::command]
-fn read_config_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[tauri::command]
 fn nuke_vault(app: tauri::AppHandle, user_id: String) -> Result<(), String> {
     let local_data_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
 
-    // We do NOT delete salt.txt anymore because it might be shared (or we assume single user per OS account?)
-    // If we want true multi-user, we should keep salt. But if loop fails, maybe we need to?
-    // Let's assume for now we only delete the specific vault file.
-
-    // Vault filename convention: "vault_<user_id>.hold"
     let vault_name = format!("vault_{}.hold", user_id);
     let vault_path = local_data_dir.join(&vault_name);
 
@@ -49,7 +13,6 @@ fn nuke_vault(app: tauri::AppHandle, user_id: String) -> Result<(), String> {
          std::fs::remove_file(&vault_path).map_err(|e| e.to_string())?;
     }
 
-    // Also check standard filenames if user_id is empty or legacy?
     if user_id == "legacy" || user_id.is_empty() {
          let legacy_path = local_data_dir.join("vault.hold");
          if legacy_path.exists() { std::fs::remove_file(&legacy_path).map_err(|e| e.to_string())?; }
@@ -131,9 +94,6 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            greet,
-            scan_for_configs,
-            read_config_file,
             nuke_vault,
             check_vault_exists
         ])

@@ -9,6 +9,7 @@ import OrganizationProjects from '@/components/organization/OrganizationProjects
 import OrganizationTeams from '@/components/organization/OrganizationTeams.vue';
 import OrganizationUsers from '@/components/organization/OrganizationUsers.vue';
 import OrganizationSettings from '@/components/organization/OrganizationSettings.vue';
+import AddOrganizationMemberDialog from '@/components/organization/dialogs/AddOrganizationMemberDialog.vue';
 import { OrganizationService } from '@/services/organization.service';
 
 const router = useRouter();
@@ -28,6 +29,9 @@ const tabs = [
 // Data
 const teams = ref<any[]>([]);
 const users = ref<any[]>([]);
+const isAddMemberOpen = ref(false);
+
+const currentMemberIds = computed(() => users.value.map(u => u.id));
 
 const organization = computed(() => store.currentOrganization);
 
@@ -67,6 +71,10 @@ async function handleTeamsUpdated() {
 async function handleNameUpdated() {
     await store.getOrganization(orgId);
 }
+
+async function handleMemberAdded() {
+    await loadUsers();
+}
 </script>
 
 <template>
@@ -93,7 +101,7 @@ async function handleNameUpdated() {
                         <span>Role: {{ organization.role }}</span>
                     </div>
                 </div>
-                <Button variant="outline" size="sm">
+                <Button v-if="canEditOrg" variant="outline" size="sm" @click="isAddMemberOpen = true">
                     <Users class="mr-2 h-4 w-4" />
                     Invite Member
                 </Button>
@@ -121,7 +129,12 @@ async function handleNameUpdated() {
             </div>
 
             <div v-show="activeTab === 'users'">
-                <OrganizationUsers :users="users" />
+                <OrganizationUsers
+                    :organization-id="orgId"
+                    :users="users"
+                    :can-edit="canEditOrg"
+                    @users-updated="loadUsers"
+                />
             </div>
 
             <div v-show="activeTab === 'settings'">
@@ -137,5 +150,12 @@ async function handleNameUpdated() {
         <div v-else class="h-full flex items-center justify-center">
             <div class="loading loading-spinner loading-lg"></div>
         </div>
+
+        <AddOrganizationMemberDialog
+            v-model:open="isAddMemberOpen"
+            :organization-id="orgId"
+            :current-member-ids="currentMemberIds"
+            @member-added="handleMemberAdded"
+        />
     </div>
 </template>

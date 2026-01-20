@@ -38,6 +38,25 @@ export interface UpdateOrganizationRequest {
     name: string;
 }
 
+export interface AddOrganizationMemberRequest {
+    userId: string;
+    role: string;
+    encryptedOrganizationKey?: string;
+}
+
+export interface SearchUserResult {
+    id: string;
+    name: string;
+    email: string;
+    avatarUrl: string;
+    publicKey?: string;
+}
+
+export interface UpdateOrganizationMemberRequest {
+    role: string;
+    encryptedOrganizationKey?: string;
+}
+
 export class OrganizationService {
     static async getOrganizations(): Promise<OrganizationListItem[]> {
         return api.get<OrganizationListItem[]>('/organizations');
@@ -67,5 +86,23 @@ export class OrganizationService {
 
     static async getOrganizationUsers(organizationId: string): Promise<OrganizationUser[]> {
         return api.get<OrganizationUser[]>(`/organizations/${organizationId}/users`);
+    }
+
+    static async addOrganizationMember(orgId: string, request: AddOrganizationMemberRequest): Promise<void> {
+        await api.post(`/organizations/${orgId}/members`, request);
+    }
+
+    static async searchUserByEmail(email: string): Promise<SearchUserResult> {
+        const searchParams = new URLSearchParams()
+        searchParams.set('email', email)
+        return api.get<SearchUserResult>(`/users/search?${searchParams.toString()}`);
+    }
+
+    static async updateOrganizationMember(orgId: string, userId: string, request: UpdateOrganizationMemberRequest): Promise<void> {
+        await api.put(`/organizations/${orgId}/members/${userId}`, request);
+    }
+
+    static async removeOrganizationMember(orgId: string, userId: string): Promise<void> {
+        await api.delete(`/organizations/${orgId}/members/${userId}`);
     }
 }

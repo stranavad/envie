@@ -13,6 +13,7 @@ import { DeviceService } from "@/services/device.service"
 import {EncryptionService} from '@/services/encryption.service'
 import { Sonner } from "@/components/ui/sonner";
 import { toast } from "vue-sonner";
+import 'vue-sonner/style.css'
 
 const auth = useAuthStore();
 const vault = useVaultStore();

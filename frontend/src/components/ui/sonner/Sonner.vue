@@ -11,6 +11,7 @@ const props = defineProps<{
 <template>
   <Sonner
     class="toaster group"
+    theme="dark"
     :position="props.position ?? 'bottom-right'"
     :expand="props.expand"
     :rich-colors="props.richColors"

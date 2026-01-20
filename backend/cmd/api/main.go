@@ -113,6 +113,10 @@ func main() {
 		authorized.GET("/organizations/:id", handlers.GetOrganization)
 		authorized.PUT("/organizations/:id", handlers.UpdateOrganization)
 		authorized.GET("/organizations/:id/users", handlers.GetOrganizationUsers)
+		authorized.POST("/organizations/:id/members", handlers.AddOrganizationMember)
+
+		// Users
+		authorized.GET("/users/search", handlers.SearchUserByEmail)
 
 		// Teams
 		authorized.POST("/teams", handlers.CreateTeam)

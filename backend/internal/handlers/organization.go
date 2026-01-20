@@ -254,3 +254,94 @@ func GetOrganizationUsers(c *gin.Context) {
 
 	c.JSON(http.StatusOK, response)
 }
+
+type AddOrganizationMemberRequest struct {
+	UserID                   uuid.UUID `json:"userId" binding:"required"`
+	Role                     string    `json:"role"`
+	EncryptedOrganizationKey *string   `json:"encryptedOrganizationKey"`
+}
+
+func AddOrganizationMember(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	requesterUID := userID.(uuid.UUID)
+	orgIDStr := c.Param("id")
+	orgID, err := uuid.Parse(orgIDStr)
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+		return
+	}
+
+	var req AddOrganizationMemberRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Role == "" {
+		req.Role = "member"
+	}
+
+	validRoles := map[string]bool{"owner": true, "admin": true, "member": true}
+	if !validRoles[req.Role] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Must be owner, admin, or member"})
+		return
+	}
+
+	var requesterOrgUser models.OrganizationUser
+	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, requesterUID).First(&requesterOrgUser).Error; err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	if requesterOrgUser.Role != "owner" && requesterOrgUser.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners and admins can add members"})
+		return
+	}
+
+	if req.Role == "owner" && requesterOrgUser.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners can add other owners"})
+		return
+	}
+
+	// Verify target user exists and has public key
+	var targetUser models.User
+	if err := database.DB.First(&targetUser, "id = ?", req.UserID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Target user not found"})
+		return
+	}
+
+	if targetUser.PublicKey == nil || *targetUser.PublicKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Target user has not set up encryption keys"})
+		return
+	}
+
+	var existingMembership models.OrganizationUser
+	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, req.UserID).First(&existingMembership).Error; err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "User is already a member of this organization"})
+		return
+	}
+
+	if (req.Role == "admin" || req.Role == "owner") && (req.EncryptedOrganizationKey == nil || *req.EncryptedOrganizationKey == "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "encryptedOrganizationKey is required for admin and owner roles"})
+		return
+	}
+
+	orgUser := models.OrganizationUser{
+		OrganizationID:           orgID,
+		UserID:                   req.UserID,
+		Role:                     req.Role,
+		EncryptedOrganizationKey: req.EncryptedOrganizationKey,
+	}
+
+	if err := database.DB.Create(&orgUser).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add member to organization"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Member added successfully",
+		"userId":  req.UserID,
+		"role":    req.Role,
+	})
+}

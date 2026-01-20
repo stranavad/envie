@@ -192,3 +192,25 @@ func RotateMasterKey(c *gin.Context) {
 		"teamsUpdated":      len(teamUsers),
 	})
 }
+
+func SearchUserByEmail(c *gin.Context) {
+	email := c.Query("email")
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email query parameter required"})
+		return
+	}
+
+	var user models.User
+	if err := database.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":        user.ID,
+		"name":      user.Name,
+		"email":     user.Email,
+		"avatarUrl": user.AvatarURL,
+		"publicKey": user.PublicKey,
+	})
+}

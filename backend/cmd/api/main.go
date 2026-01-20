@@ -114,6 +114,8 @@ func main() {
 		authorized.PUT("/organizations/:id", handlers.UpdateOrganization)
 		authorized.GET("/organizations/:id/users", handlers.GetOrganizationUsers)
 		authorized.POST("/organizations/:id/members", handlers.AddOrganizationMember)
+		authorized.PUT("/organizations/:id/members/:userId", handlers.UpdateOrganizationMember)
+		authorized.DELETE("/organizations/:id/members/:userId", handlers.RemoveOrganizationMember)
 
 		// Users
 		authorized.GET("/users/search", handlers.SearchUserByEmail)

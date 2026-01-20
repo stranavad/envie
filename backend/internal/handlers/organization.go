@@ -345,3 +345,170 @@ func AddOrganizationMember(c *gin.Context) {
 		"role":    req.Role,
 	})
 }
+
+type UpdateOrganizationMemberRequest struct {
+	Role                     string  `json:"role" binding:"required"`
+	EncryptedOrganizationKey *string `json:"encryptedOrganizationKey"`
+}
+
+func UpdateOrganizationMember(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	requesterUID := userID.(uuid.UUID)
+	orgIDStr := c.Param("id")
+	targetUserIDStr := c.Param("userId")
+
+	orgID, err := uuid.Parse(orgIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+		return
+	}
+
+	targetUserID, err := uuid.Parse(targetUserIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	var req UpdateOrganizationMemberRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	validRoles := map[string]bool{"owner": true, "admin": true, "member": true}
+	if !validRoles[req.Role] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Must be owner, admin, or member"})
+		return
+	}
+
+	var requesterOrgUser models.OrganizationUser
+	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, requesterUID).First(&requesterOrgUser).Error; err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	if requesterOrgUser.Role != "owner" && requesterOrgUser.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners and admins can update members"})
+		return
+	}
+
+	var targetOrgUser models.OrganizationUser
+	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, targetUserID).First(&targetOrgUser).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Member not found"})
+		return
+	}
+
+	if (targetOrgUser.Role == "owner" || req.Role == "owner") && requesterOrgUser.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners can modify owner roles"})
+		return
+	}
+
+	if requesterUID == targetUserID && targetOrgUser.Role == "owner" && req.Role != "owner" {
+		var ownerCount int64
+
+		database.DB.Model(&models.OrganizationUser{}).Where("organization_id = ? AND role = ?", orgID, "owner").Count(&ownerCount)
+		if ownerCount <= 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot demote the last owner"})
+			return
+		}
+	}
+
+	if (req.Role == "admin" || req.Role == "owner") && targetOrgUser.Role == "member" {
+		if req.EncryptedOrganizationKey == nil || *req.EncryptedOrganizationKey == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "encryptedOrganizationKey is required when promoting to admin or owner"})
+			return
+		}
+	}
+
+	updates := map[string]interface{}{"role": req.Role}
+	if req.Role == "member" {
+		updates["encrypted_organization_key"] = nil
+	} else if req.EncryptedOrganizationKey != nil {
+		updates["encrypted_organization_key"] = *req.EncryptedOrganizationKey
+	}
+
+	if err := database.DB.Model(&targetOrgUser).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update member"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Member updated successfully",
+		"userId":  targetUserID,
+		"role":    req.Role,
+	})
+}
+
+func RemoveOrganizationMember(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	requesterUID := userID.(uuid.UUID)
+	orgIDStr := c.Param("id")
+	targetUserIDStr := c.Param("userId")
+
+	orgID, err := uuid.Parse(orgIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+		return
+	}
+
+	targetUserID, err := uuid.Parse(targetUserIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	var requesterOrgUser models.OrganizationUser
+	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, requesterUID).First(&requesterOrgUser).Error; err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	if requesterOrgUser.Role != "owner" && requesterOrgUser.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners and admins can remove members"})
+		return
+	}
+
+	var targetOrgUser models.OrganizationUser
+	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, targetUserID).First(&targetOrgUser).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Member not found"})
+		return
+	}
+
+	if targetOrgUser.Role == "owner" && requesterOrgUser.Role != "owner" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners can remove other owners"})
+		return
+	}
+
+	if requesterUID == targetUserID && targetOrgUser.Role == "owner" {
+		var ownerCount int64
+		database.DB.Model(&models.OrganizationUser{}).Where("organization_id = ? AND role = ?", orgID, "owner").Count(&ownerCount)
+		if ownerCount <= 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove the last owner"})
+			return
+		}
+	}
+
+	tx := database.DB.Begin()
+
+	if err := tx.Where("user_id = ? AND team_id IN (SELECT id FROM teams WHERE organization_id = ?)", targetUserID, orgID).Delete(&models.TeamUser{}).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove member from teams"})
+		return
+	}
+
+	if err := tx.Delete(&targetOrgUser).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove member"})
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Member removed successfully",
+		"userId":  targetUserID,
+	})
+}

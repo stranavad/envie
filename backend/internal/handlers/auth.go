@@ -178,15 +178,11 @@ func AuthExchange(c *gin.Context) {
 	}
 
 
-	var deviceID *uuid.UUID
+	// Update device LastActive if device public key provided
 	if req.DevicePublicKey != "" {
-		var device models.UserIdentity
-		if err := database.DB.Where("user_id = ? AND public_key = ?", user.ID, req.DevicePublicKey).First(&device).Error; err == nil {
-			deviceID = &device.ID
-			// Update LastActive for identity
-			device.LastActive = time.Now()
-			database.DB.Save(&device)
-		}
+		database.DB.Model(&models.UserIdentity{}).
+			Where("user_id = ? AND public_key = ?", user.ID, req.DevicePublicKey).
+			Update("last_active", time.Now())
 	}
 
 	accessToken, err := auth.GenerateAccessToken(user.ID)
@@ -195,20 +191,9 @@ func AuthExchange(c *gin.Context) {
 		return
 	}
 
-	refreshToken, refreshTokenHash, err := auth.GenerateRefreshToken(user.ID)
+	refreshToken, err := auth.GenerateRefreshToken(user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate refresh token"})
-		return
-	}
-
-	refreshTokenRecord := models.RefreshToken{
-		Token:     refreshTokenHash,
-		UserID:    user.ID,
-		DeviceID:  deviceID,
-		ExpiresAt: time.Now().Add(auth.RefreshTokenDuration),
-	}
-	if err := database.DB.Create(&refreshTokenRecord).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save refresh token"})
 		return
 	}
 
@@ -239,63 +224,23 @@ func AuthRefresh(c *gin.Context) {
 		return
 	}
 
-	// Hash the provided refresh token
-	tokenHash := auth.HashToken(req.RefreshToken)
-
-	var refreshToken models.RefreshToken
-	result := database.DB.Where("token = ?", tokenHash).First(&refreshToken)
-	if result.Error != nil {
+	// Validate the refresh token JWT
+	claims, err := auth.ValidateRefreshToken(req.RefreshToken)
+	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid refresh token"})
 		return
 	}
 
-	if !refreshToken.IsValid() {
-		database.DB.Model(&models.RefreshToken{}).
-			Where("family_id = ?", refreshToken.FamilyID).
-			Update("revoked_at", time.Now())
-
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Refresh token has been revoked"})
-		return
-	}
-
-	now := time.Now()
-	refreshToken.RevokedAt = &now
-	database.DB.Save(&refreshToken)
-
-	var user models.User
-	if err := database.DB.First(&user, "id = ?", refreshToken.UserID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User not found"})
-		return
-	}
-
-	if refreshToken.DeviceID != nil {
-		database.DB.Model(&models.UserIdentity{}).
-			Where("id = ?", refreshToken.DeviceID).
-			Update("last_active", time.Now())
-	}
-
-	accessToken, err := auth.GenerateAccessToken(user.ID)
+	// Generate new tokens
+	accessToken, err := auth.GenerateAccessToken(claims.UserID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
 		return
 	}
 
-	newRefreshToken, newRefreshTokenHash, err := auth.GenerateRefreshToken(user.ID)
+	newRefreshToken, err := auth.GenerateRefreshToken(claims.UserID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate refresh token"})
-		return
-	}
-
-	newRefreshTokenRecord := models.RefreshToken{
-		Token:     newRefreshTokenHash,
-		UserID:    user.ID,
-		DeviceID:  refreshToken.DeviceID,
-		FamilyID:  refreshToken.FamilyID,
-		ExpiresAt: time.Now().Add(auth.RefreshTokenDuration),
-	}
-
-	if err := database.DB.Create(&newRefreshTokenRecord).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save refresh token"})
 		return
 	}
 
@@ -307,13 +252,8 @@ func AuthRefresh(c *gin.Context) {
 }
 
 func AuthLogout(c *gin.Context) {
-	userIDVal, _ := c.Get("user_id")
-	userID := userIDVal.(uuid.UUID)
-
-	database.DB.Model(&models.RefreshToken{}).
-		Where("user_id = ? AND revoked_at IS NULL", userID).
-		Update("revoked_at", time.Now())
-
+	// With stateless JWT refresh tokens, we can't revoke server-side.
+	// The client should discard the tokens locally.
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
 }
 

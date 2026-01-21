@@ -51,7 +51,7 @@ func Connect() {
 		&models.ProjectFile{},
 
 		&models.LinkingCode{},
-		&models.RefreshToken{},
+		// RefreshToken table no longer needed - using stateless JWTs
 	); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}

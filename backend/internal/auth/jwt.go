@@ -2,7 +2,6 @@ package auth
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -35,21 +34,8 @@ func GenerateAccessToken(userID uuid.UUID) (string, error) {
 	return generateToken(userID, TokenTypeAccess, AccessTokenDuration)
 }
 
-func GenerateRefreshToken(userID uuid.UUID) (token string, hash string, err error) {
-	// Generate a random token
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return "", "", err
-	}
-	token = hex.EncodeToString(tokenBytes)
-	hash = HashToken(token)
-	return token, hash, nil
-}
-
-func HashToken(token string) string {
-	h := sha256.New()
-	h.Write([]byte(token))
-	return hex.EncodeToString(h.Sum(nil))
+func GenerateRefreshToken(userID uuid.UUID) (string, error) {
+	return generateToken(userID, TokenTypeRefresh, RefreshTokenDuration)
 }
 
 func GenerateLinkingCode() (string, error) {
@@ -101,6 +87,17 @@ func ValidateAccessToken(tokenString string) (*Claims, error) {
 	}
 	if claims.TokenType != TokenTypeAccess {
 		return nil, errors.New("invalid token type: expected access token")
+	}
+	return claims, nil
+}
+
+func ValidateRefreshToken(tokenString string) (*Claims, error) {
+	claims, err := ValidateToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	if claims.TokenType != TokenTypeRefresh {
+		return nil, errors.New("invalid token type: expected refresh token")
 	}
 	return claims, nil
 }

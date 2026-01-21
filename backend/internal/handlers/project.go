@@ -51,6 +51,7 @@ type ProjectListItem struct {
 	EncryptedProjectKey string    `json:"encryptedProjectKey"`
 	EncryptedTeamKey    string    `json:"encryptedTeamKey,omitempty"`
 	KeyVersion          int       `json:"keyVersion"`
+	ConfigChecksum      string    `json:"configChecksum,omitempty"`
 	CreatedAt           string    `json:"createdAt"`
 	UpdatedAt           string    `json:"updatedAt"`
 }
@@ -261,6 +262,11 @@ func GetProjects(c *gin.Context) {
 		org := orgMap[p.OrganizationID]
 		ti := projectTeamInfo[p.ID]
 
+		configChecksum := ""
+		if p.ConfigChecksum != nil {
+			configChecksum = *p.ConfigChecksum
+		}
+
 		projects = append(projects, ProjectListItem{
 			ID:                  p.ID,
 			Name:                p.Name,
@@ -271,6 +277,7 @@ func GetProjects(c *gin.Context) {
 			EncryptedProjectKey: ti.EncryptedProjectKey,
 			EncryptedTeamKey:    ti.EncryptedTeamKey,
 			KeyVersion:          p.KeyVersion,
+			ConfigChecksum:      configChecksum,
 			CreatedAt:           p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			UpdatedAt:           p.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		})

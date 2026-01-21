@@ -12,7 +12,7 @@ import ProjectAccess from '@/components/project/ProjectAccess.vue';
 import ProjectFiles from '@/components/project/ProjectFiles.vue';
 import { FileMappingService, type SyncStatus } from '@/services/file-mapping.service';
 import { useProjectDecryption } from '@/composables/useProjectDecryption';
-import { useConfigEncryption } from '@/composables/useConfigEncryption';
+import { useFileSync } from '@/composables/useFileSync';
 
 const route = useRoute();
 const router = useRouter();
@@ -20,7 +20,7 @@ const projectId = route.params.id as string;
 
 // Composables
 const { isDecrypting, decryptionError, decryptProjectKeys } = useProjectDecryption();
-const { fetchAndDecryptConfig } = useConfigEncryption();
+const { pullToLocal, readLocalItems } = useFileSync();
 
 const project = ref<ProjectDetail | null>(null);
 const isLoading = ref(false);
@@ -124,27 +124,7 @@ async function handlePull() {
     syncError.value = '';
 
     try {
-        const mapping = await FileMappingService.getMapping(projectId);
-        if (!mapping) {
-            throw new Error('No file mapping found');
-        }
-
-        // Fetch and decrypt config items using composable
-        const decryptedItems = await fetchAndDecryptConfig(projectId, decryptedKey.value);
-
-        // Write to local file
-        const localChecksum = await FileMappingService.writeToLocalFile(
-            mapping.filePath,
-            decryptedItems
-        );
-
-        // Update sync state
-        await FileMappingService.updateSyncState(
-            projectId,
-            localChecksum,
-            project.value.configChecksum || ''
-        );
-
+        await pullToLocal(projectId, decryptedKey.value, project.value.configChecksum || '');
         syncStatus.value = 'synced';
     } catch (e: any) {
         console.error('Pull failed', e);
@@ -158,13 +138,7 @@ async function handlePushReview() {
     if (!project.value) return;
 
     try {
-        const mapping = await FileMappingService.getMapping(projectId);
-        if (!mapping) {
-            throw new Error('No file mapping found');
-        }
-
-        // Read local file and trigger review mode
-        const localItems = await FileMappingService.readLocalFile(mapping.filePath);
+        const localItems = await readLocalItems(projectId);
         handleReviewLocalChanges(localItems);
     } catch (e: any) {
         console.error('Failed to load local changes', e);

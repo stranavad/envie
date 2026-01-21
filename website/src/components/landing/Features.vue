@@ -6,7 +6,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { KeyRound, FolderLock, Users, Building2, RefreshCw, Cloud, ArrowRight } from 'lucide-vue-next'
+import { KeyRound, FolderLock, Users, RefreshCw, Cloud, ArrowRight, HardDrive } from 'lucide-vue-next'
 
 const features = [
   {
@@ -15,18 +15,18 @@ const features = [
     icon: KeyRound,
   },
   {
+    title: 'Local .env File Sync',
+    description: 'Link projects to local .env files on each device. Push local changes or pull remote updates with one click.',
+    icon: HardDrive,
+  },
+  {
     title: 'Encrypted File Sharing',
     description: 'Share sensitive files like .env, credentials, and certificates securely within your team.',
     icon: FolderLock,
   },
   {
-    title: 'Organizations & Teams',
-    description: 'Structure your secrets with organizations, teams, and projects. Fine-grained access control at every level.',
-    icon: Building2,
-  },
-  {
-    title: 'Team Collaboration',
-    description: 'Work together with granular permissions. Each team member has their own encryption keys.',
+    title: 'Teams & Collaboration',
+    description: 'Structure secrets with organizations, teams, and projects. Each member has their own encryption keys with fine-grained access control.',
     icon: Users,
   },
   {

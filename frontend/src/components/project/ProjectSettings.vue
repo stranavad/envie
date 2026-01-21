@@ -11,6 +11,7 @@ import {FileMappingService, type FileMapping, type SyncStatus} from '@/services/
 import {open} from '@tauri-apps/plugin-dialog';
 import {FileText, Link2, Unlink, Download, Upload, AlertCircle, CheckCircle2, RefreshCw, Loader2} from 'lucide-vue-next';
 import {useConfigEncryption} from '@/composables/useConfigEncryption';
+import {useFileSync} from '@/composables/useFileSync';
 
 const props = defineProps<{
     project: ProjectDetail;
@@ -25,7 +26,8 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
-const { fetchAndDecryptConfig, encryptConfigItems } = useConfigEncryption();
+const { fetchAndDecryptConfig } = useConfigEncryption();
+const { pullToLocal, pushToRemote, readLocalItems } = useFileSync();
 const error = ref('');
 const success = ref('');
 
@@ -126,22 +128,7 @@ async function handlePull() {
     fileMappingSuccess.value = '';
 
     try {
-        // Fetch and decrypt config items using composable
-        const decryptedItems = await fetchAndDecryptConfig(props.project.id, props.decryptedKey);
-
-        // Write to local file
-        const localChecksum = await FileMappingService.writeToLocalFile(
-            fileMapping.value.filePath,
-            decryptedItems
-        );
-
-        // Update sync state
-        await FileMappingService.updateSyncState(
-            props.project.id,
-            localChecksum,
-            props.project.configChecksum || ''
-        );
-
+        await pullToLocal(props.project.id, props.decryptedKey, props.project.configChecksum || '');
         syncStatus.value = 'synced';
         fileMappingSuccess.value = 'Local file updated from remote.';
         await loadFileMapping();
@@ -159,11 +146,11 @@ async function handlePushClick() {
     fileMappingSuccess.value = '';
 
     try {
-        // Read local file
-        const localItems = await FileMappingService.readLocalFile(fileMapping.value.filePath);
-
-        // Fetch and decrypt current remote config for comparison using composable
-        const decryptedConfigs = await fetchAndDecryptConfig(props.project.id, props.decryptedKey);
+        // Read local file and fetch remote config for comparison
+        const [localItems, decryptedConfigs] = await Promise.all([
+            readLocalItems(props.project.id),
+            fetchAndDecryptConfig(props.project.id, props.decryptedKey),
+        ]);
 
         // Open preview dialog
         pushPreviewLocalItems.value = localItems;
@@ -182,53 +169,11 @@ async function handleDirectPush() {
     fileMappingSuccess.value = '';
 
     try {
-        // Merge local items into remote: update existing by name, add new ones
-        const remoteItems = [...pushPreviewRemoteItems.value];
-
-        for (const localItem of pushPreviewLocalItems.value) {
-            const existingIndex = remoteItems.findIndex(r => r.name === localItem.name);
-            if (existingIndex !== -1) {
-                // Update existing
-                remoteItems[existingIndex] = {
-                    ...remoteItems[existingIndex],
-                    value: localItem.value,
-                };
-            } else {
-                // Add new
-                remoteItems.push({
-                    id: crypto.randomUUID(),
-                    projectId: props.project.id,
-                    name: localItem.name,
-                    value: localItem.value,
-                    sensitive: true,
-                    position: remoteItems.length,
-                });
-            }
-        }
-
-        // Encrypt and save using composable
-        const itemsToSave = await encryptConfigItems(props.decryptedKey, remoteItems);
-        await ProjectService.syncConfig(props.project.id, itemsToSave);
-
-        // Reload project to get new checksum
-        const updatedProject = await ProjectService.getProject(props.project.id);
-
-        // Compute local checksum and update mapping
-        const localChecksum = await FileMappingService.computeChecksum(
-            pushPreviewLocalItems.value.map((item, index) => ({
-                id: '',
-                projectId: props.project.id,
-                name: item.name,
-                value: item.value,
-                sensitive: false,
-                position: index,
-            }))
-        );
-
-        await FileMappingService.updateSyncState(
+        const { updatedProject } = await pushToRemote(
             props.project.id,
-            localChecksum,
-            updatedProject.configChecksum || ''
+            props.decryptedKey,
+            pushPreviewLocalItems.value,
+            pushPreviewRemoteItems.value
         );
 
         showPushPreview.value = false;

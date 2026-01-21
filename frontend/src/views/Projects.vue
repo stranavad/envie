@@ -9,11 +9,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Building2, ArrowRight, KeyRound, AlertTriangle, Loader2 } from 'lucide-vue-next';
 import ProjectListItem from '@/components/project/ProjectListItem.vue';
 import { useProjectDecryption } from '@/composables/useProjectDecryption';
-import { useConfigEncryption } from '@/composables/useConfigEncryption';
+import { useFileSync } from '@/composables/useFileSync';
 
 const router = useRouter();
 const { decryptProjectKeys } = useProjectDecryption();
-const { fetchAndDecryptConfig } = useConfigEncryption();
+const { pullToLocal } = useFileSync();
 const projects = ref<Project[]>([]);
 const pendingRotations = ref<PendingRotationWithProject[]>([]);
 const syncStatusMap = ref<Record<string, SyncStatus>>({});
@@ -63,10 +63,11 @@ async function loadProjects() {
 async function loadSyncStatuses(projectsList: Project[]) {
     try {
         const mappings = await FileMappingService.getAllMappings();
+        const projectMap = new Map(projectsList.map(p => [p.id, p]));
         const statusMap: Record<string, SyncStatus> = {};
 
         for (const mapping of mappings) {
-            const project = projectsList.find(p => p.id === mapping.projectId);
+            const project = projectMap.get(mapping.projectId);
             if (!project) continue;
 
             const result = await FileMappingService.checkSyncStatus(
@@ -90,16 +91,10 @@ async function handlePull(projectId: string) {
     pullingMap.value[projectId] = true;
 
     try {
-        // Get file mapping
-        const mapping = await FileMappingService.getMapping(projectId);
-        if (!mapping) {
-            throw new Error('No file mapping found');
-        }
-
         // Get project details to access encrypted keys
         const projectDetail = await ProjectService.getProject(projectId);
 
-        // Decrypt project key using composable
+        // Decrypt project key
         const { projectKey } = await decryptProjectKeys({
             teamId: projectDetail.teamId,
             organizationId: projectDetail.organizationId,
@@ -107,23 +102,9 @@ async function handlePull(projectId: string) {
             encryptedProjectKey: projectDetail.encryptedProjectKey,
         });
 
-        // Fetch and decrypt config items using composable
-        const decryptedItems = await fetchAndDecryptConfig(projectId, projectKey);
+        // Pull using composable
+        await pullToLocal(projectId, projectKey, projectDetail.configChecksum || '');
 
-        // Write to local file
-        const localChecksum = await FileMappingService.writeToLocalFile(
-            mapping.filePath,
-            decryptedItems
-        );
-
-        // Update sync state
-        await FileMappingService.updateSyncState(
-            projectId,
-            localChecksum,
-            projectDetail.configChecksum || ''
-        );
-
-        // Update local status
         syncStatusMap.value[projectId] = 'synced';
     } catch (e: any) {
         console.error('Pull failed', e);

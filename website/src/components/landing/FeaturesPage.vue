@@ -20,7 +20,6 @@ import {
   Layers,
   Copy,
   Lock,
-  Eye,
   EyeOff,
   FileText,
   FileKey,
@@ -31,7 +30,10 @@ import {
   Folder,
   Cloud,
   ArrowRight,
-  Server
+  Server,
+  HardDrive,
+  Link2,
+  RefreshCcw
 } from 'lucide-vue-next'
 
 const githubUrl = 'https://github.com/stranavad/envie'
@@ -170,6 +172,108 @@ const mockFiles = [
               <div class="bg-secondary/30 border-t border-border/50 px-4 py-2 flex items-center justify-between text-xs text-muted-foreground">
                 <span>3 variables</span>
                 <span>Last synced: just now</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Local .env File Sync Feature -->
+      <div class="grid lg:grid-cols-2 gap-12 items-center mb-24">
+        <div class="lg:order-2">
+          <div class="inline-flex items-center rounded-full bg-emerald-500/10 px-4 py-1.5 text-sm font-medium text-emerald-400 border border-emerald-500/20 mb-4">
+            <HardDrive class="mr-2 size-4" />
+            Local File Sync
+          </div>
+          <h2 class="text-3xl font-bold mb-4">Local .env File Sync</h2>
+          <p class="text-lg text-muted-foreground mb-6 leading-relaxed">
+            Link any Envie project to a local .env file on your computer. Each device can have its own linked file, and you control when to sync - push your local changes or pull the latest from your team.
+          </p>
+          <ul class="space-y-3">
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-emerald-500"></div>
+              Link different .env files per device
+            </li>
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-emerald-500"></div>
+              Automatic change detection
+            </li>
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-emerald-500"></div>
+              Push local changes to share with team
+            </li>
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-emerald-500"></div>
+              Pull remote updates to local file
+            </li>
+          </ul>
+        </div>
+        <div class="lg:order-1">
+          <!-- Local File Sync Illustration -->
+          <div class="relative">
+            <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/20 to-transparent blur-3xl rounded-full -z-10"></div>
+            <div class="bg-card border border-border/50 rounded-xl shadow-2xl overflow-hidden">
+              <!-- Header -->
+              <div class="bg-secondary/50 border-b border-border/50 px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <Folder class="size-4 text-primary" />
+                  <span class="font-medium text-sm">my-app</span>
+                </div>
+                <div class="flex items-center gap-1.5 text-xs">
+                  <CheckCircle2 class="size-3.5 text-emerald-500" />
+                  <span class="text-emerald-400">Synced</span>
+                </div>
+              </div>
+
+              <!-- Linked File Info -->
+              <div class="p-4 border-b border-border/50">
+                <div class="flex items-center gap-3 p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
+                  <div class="size-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+                    <FileText class="size-5" />
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="font-mono text-sm truncate">/Users/dev/my-app/.env</div>
+                    <div class="text-xs text-muted-foreground flex items-center gap-1.5 mt-0.5">
+                      <Link2 class="size-3" />
+                      Linked on this device
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Sync Actions -->
+              <div class="p-4 space-y-3">
+                <div class="flex gap-2">
+                  <button class="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 bg-secondary/50 hover:bg-secondary rounded-lg text-sm transition-colors">
+                    <Download class="size-4 text-blue-400" />
+                    <span>Pull</span>
+                  </button>
+                  <button class="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 bg-secondary/50 hover:bg-secondary rounded-lg text-sm transition-colors">
+                    <Upload class="size-4 text-orange-400" />
+                    <span>Push</span>
+                  </button>
+                </div>
+                <p class="text-xs text-muted-foreground text-center">
+                  Pull overwrites local file • Push uploads to Envie
+                </p>
+              </div>
+
+              <!-- Sync Status Examples -->
+              <div class="border-t border-border/50 divide-y divide-border/50">
+                <div class="px-4 py-2.5 flex items-center justify-between text-xs">
+                  <div class="flex items-center gap-2">
+                    <RefreshCcw class="size-3.5 text-orange-400" />
+                    <span class="text-orange-400">Local file changed</span>
+                  </div>
+                  <span class="text-muted-foreground">Push to sync</span>
+                </div>
+                <div class="px-4 py-2.5 flex items-center justify-between text-xs">
+                  <div class="flex items-center gap-2">
+                    <Download class="size-3.5 text-blue-400" />
+                    <span class="text-blue-400">Remote changed</span>
+                  </div>
+                  <span class="text-muted-foreground">Pull to sync</span>
+                </div>
               </div>
             </div>
           </div>

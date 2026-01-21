@@ -35,9 +35,10 @@ type ProjectResponse struct {
 	TeamName            string    `json:"teamName"`
 	TeamRole            string    `json:"teamRole,omitempty"`
 	OrgRole             string    `json:"orgRole,omitempty"`
-	CanEdit    bool `json:"canEdit"`
-	CanDelete  bool `json:"canDelete"`
-	KeyVersion int  `json:"keyVersion"`
+	CanEdit        bool   `json:"canEdit"`
+	CanDelete      bool   `json:"canDelete"`
+	KeyVersion     int    `json:"keyVersion"`
+	ConfigChecksum string `json:"configChecksum,omitempty"`
 }
 
 type ProjectListItem struct {
@@ -318,6 +319,11 @@ func GetProject(c *gin.Context) {
 		orgName = org.Name
 	}
 
+	configChecksum := ""
+	if access.Project.ConfigChecksum != nil {
+		configChecksum = *access.Project.ConfigChecksum
+	}
+
 	response := ProjectResponse{
 		ID:                  access.Project.ID,
 		Name:                access.Project.Name,
@@ -329,9 +335,10 @@ func GetProject(c *gin.Context) {
 		EncryptedTeamKey:    access.EncryptedTeamKey,
 		TeamRole:            access.TeamRole,
 		OrgRole:             access.OrgRole,
-		CanEdit:    access.CanEdit,
-		CanDelete:  access.CanDelete,
-		KeyVersion: access.Project.KeyVersion,
+		CanEdit:        access.CanEdit,
+		CanDelete:      access.CanDelete,
+		KeyVersion:     access.Project.KeyVersion,
+		ConfigChecksum: configChecksum,
 	}
 
 	if access.Team != nil {

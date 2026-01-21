@@ -44,7 +44,6 @@ export function useProjectDecryption() {
 
         // Strategy 1: User is a team member - use encryptedTeamKey
         if (encryptedTeamKey) {
-            console.log('Decrypting team key via user\'s encrypted team key');
             teamKey = await EncryptionService.decryptKey(
                 masterKeyPair.privateKey,
                 encryptedTeamKey
@@ -54,8 +53,6 @@ export function useProjectDecryption() {
         // Strategy 2: User is org owner/admin without team membership
         // Need to fetch team info and decrypt via org key
         if (!teamKey && teamId && organizationId) {
-            console.log('Attempting decryption via organization key (org owner/admin path)');
-
             const orgKey = await orgStore.unlockOrganization(organizationId);
             if (!orgKey) {
                 throw new Error('Unable to access organization key. You may not have sufficient permissions.');
@@ -120,7 +117,6 @@ export function useProjectDecryption() {
         teamKey: string,
         encryptedProjectKey: string
     ): Promise<string> {
-        console.log('Decrypting project key with team key');
         return await EncryptionService.decryptValue(teamKey, encryptedProjectKey);
     }
 

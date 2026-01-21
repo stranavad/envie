@@ -1,12 +1,25 @@
+import { parse as parseDotenv } from 'dotenv';
 import type { ConfigItem } from '@/services/project.service';
 
 /**
+ * Characters that require quoting in .env files.
+ * These can cause issues with shell interpretation or .env parsing.
+ */
+const SPECIAL_CHARS = /["\n\r\s$`!#&;|<>(){}[\]*?~\\'^]/;
+
+/**
  * Format a value for .env file output.
- * Wraps in quotes if the value contains special characters.
+ * Wraps in double quotes if the value contains special characters.
  */
 export function formatEnvValue(val: string): string {
-    if (val.includes('"') || val.includes('\n') || val.includes(' ')) {
-        return `"${val.replace(/"/g, '\\"')}"`;
+    if (SPECIAL_CHARS.test(val)) {
+        // Escape backslashes first, then double quotes, then newlines
+        const escaped = val
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"')
+            .replace(/\n/g, '\\n')
+            .replace(/\r/g, '\\r');
+        return `"${escaped}"`;
     }
     return val;
 }
@@ -103,29 +116,12 @@ export interface ParsedEnvItem {
 
 /**
  * Parse .env format string into key-value pairs.
- * Ignores comments and empty lines.
+ * Uses dotenv library for proper multiline value support.
  */
 export function parseEnvString(input: string): ParsedEnvItem[] {
-    const items: ParsedEnvItem[] = [];
-    const lines = input.split('\n');
-
-    lines.forEach((line) => {
-        const trim = line.trim();
-        if (!trim || trim.startsWith('#')) return;
-
-        const eq = trim.indexOf('=');
-        if (eq === -1) return;
-
-        const key = trim.slice(0, eq).trim();
-        let val = trim.slice(eq + 1).trim();
-
-        // Remove surrounding quotes
-        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-            val = val.slice(1, -1);
-        }
-
-        items.push({ name: key, value: val });
-    });
-
-    return items;
+    const parsed = parseDotenv(input);
+    return Object.entries(parsed).map(([name, value]) => ({
+        name,
+        value: value ?? '',
+    }));
 }

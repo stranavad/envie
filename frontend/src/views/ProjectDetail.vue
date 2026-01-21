@@ -276,7 +276,7 @@ loadProject();
 
             <TabNav v-model="activeTab" :tabs="tabs" />
 
-            <div v-show="activeTab === 'config'" class="space-y-6 min-w-0">
+            <div v-if="activeTab === 'config' && decryptedKey" class="space-y-6 min-w-0">
                 <ProjectConfig
                     :project="project"
                     :decrypted-key="decryptedKey"
@@ -286,15 +286,15 @@ loadProject();
                 />
             </div>
 
-            <div v-show="activeTab === 'files'" class="space-y-6">
+            <div v-if="activeTab === 'files' && decryptedKey" class="space-y-6">
                 <ProjectFiles :project="project" :project-key="decryptedKey" />
             </div>
 
-            <div v-show="activeTab === 'access'" class="space-y-6">
+            <div v-if="activeTab === 'access' && decryptedKey" class="space-y-6">
                 <ProjectAccess :project="project" :decrypted-key="decryptedKey" />
             </div>
 
-            <div v-show="activeTab === 'settings'" class="space-y-6">
+            <div v-if="activeTab === 'settings' && decryptedKey" class="space-y-6">
                 <ProjectSettings
                     :project="project"
                     :decrypted-key="decryptedKey"
@@ -305,7 +305,7 @@ loadProject();
                 />
             </div>
 
-            <div v-show="activeTab === 'providers'" class="space-y-6">
+            <div v-if="activeTab === 'providers' && decryptedKey" class="space-y-6">
                 <ProjectProviders :project="project" :decrypted-key="decryptedKey" />
             </div>
         </div>

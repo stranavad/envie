@@ -1,7 +1,9 @@
 import { Store } from '@tauri-apps/plugin-store';
 import { invoke } from '@tauri-apps/api/core';
+import { parse as parseDotenv } from 'dotenv';
 import { IdentityService } from './identity.service';
 import type { ConfigItem } from './project.service';
+import { buildEnvString } from '@/utils/env-format';
 
 // Custom Tauri commands for file operations (bypass fs plugin scope restrictions)
 async function readTextFile(path: string): Promise<string> {
@@ -206,25 +208,30 @@ export class FileMappingService {
 
     /**
      * Write config items to a local .env file (Pull operation)
+     * Includes category comments matching the copy .env format
      */
     static async writeToLocalFile(filePath: string, items: ConfigItem[]): Promise<string> {
         // Sort items by position
         const sortedItems = [...items].sort((a, b) => a.position - b.position);
 
-        // Build .env content
-        const lines: string[] = [];
-        for (const item of sortedItems) {
-            // Escape values that contain special characters
-            let value = item.value;
-            if (value.includes('\n') || value.includes('"') || value.includes(' ')) {
-                // Escape double quotes and wrap in quotes
-                value = '"' + value.replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
+        // Extract unique categories in order of first appearance
+        const categories: string[] = [];
+        sortedItems.forEach(item => {
+            if (item.category && !categories.includes(item.category)) {
+                categories.push(item.category);
             }
-            lines.push(`${item.name}=${value}`);
-        }
+        });
 
-        const content = lines.join('\n') + '\n';
-        await writeTextFile(filePath, content);
+        // Helper functions for buildEnvString
+        const getCategoryItems = (category: string) =>
+            sortedItems.filter(item => item.category === category);
+
+        const getUncategorizedItems = () =>
+            sortedItems.filter(item => !item.category);
+
+        // Build .env content with category comments
+        const content = buildEnvString(sortedItems, categories, getCategoryItems, getUncategorizedItems);
+        await writeTextFile(filePath, content + '\n');
 
         return await this.computeLocalFileChecksum(content);
     }
@@ -238,43 +245,15 @@ export class FileMappingService {
     }
 
     /**
-     * Parse .env file content into name-value pairs
+     * Parse .env file content into name-value pairs.
+     * Uses dotenv library for proper multiline value support.
      */
     static parseEnvContent(content: string): { name: string; value: string }[] {
-        const items: { name: string; value: string }[] = [];
-        const lines = content.split('\n');
-
-        for (const line of lines) {
-            const trimmed = line.trim();
-
-            // Skip empty lines and comments
-            if (!trimmed || trimmed.startsWith('#')) {
-                continue;
-            }
-
-            // Find first = sign
-            const eqIndex = trimmed.indexOf('=');
-            if (eqIndex === -1) {
-                continue;
-            }
-
-            const name = trimmed.substring(0, eqIndex).trim();
-            let value = trimmed.substring(eqIndex + 1);
-
-            // Handle quoted values
-            if ((value.startsWith('"') && value.endsWith('"')) ||
-                (value.startsWith("'") && value.endsWith("'"))) {
-                value = value.slice(1, -1);
-                // Unescape escaped characters
-                value = value.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\'/g, "'");
-            }
-
-            if (name) {
-                items.push({ name, value });
-            }
-        }
-
-        return items;
+        const parsed = parseDotenv(content);
+        return Object.entries(parsed).map(([name, value]) => ({
+            name,
+            value: value ?? '',
+        }));
     }
 
     /**

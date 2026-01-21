@@ -54,6 +54,18 @@ func main() {
 			"message": "pong",
 		})
 	})
+	r.GET("/health", func(c *gin.Context) {
+		sqlDB, err := database.DB.DB()
+		if err != nil {
+			c.String(503, "Database connection unavailable")
+			return
+		}
+		if err := sqlDB.Ping(); err != nil {
+			c.String(503, "Database connection failed")
+			return
+		}
+		c.String(200, "OK")
+	})
 
 	// Protected routes
 	authorized := r.Group("/")

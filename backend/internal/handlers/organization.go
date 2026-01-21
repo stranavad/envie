@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"net/http"
-
 	"envie-backend/internal/database"
 	"envie-backend/internal/models"
 
@@ -18,12 +16,14 @@ type CreateOrganizationRequest struct {
 }
 
 func CreateOrganization(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
 	var req CreateOrganizationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
@@ -35,7 +35,7 @@ func CreateOrganization(c *gin.Context) {
 
 	if err := tx.Create(&org).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create organization"})
+		RespondInternalError(c, "Failed to create organization")
 		return
 	}
 
@@ -48,7 +48,7 @@ func CreateOrganization(c *gin.Context) {
 
 	if err := tx.Create(&orgUser).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add user to organization"})
+		RespondInternalError(c, "Failed to add user to organization")
 		return
 	}
 
@@ -60,7 +60,7 @@ func CreateOrganization(c *gin.Context) {
 
 	if err := tx.Create(&generalTeam).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create general team"})
+		RespondInternalError(c, "Failed to create general team")
 		return
 	}
 
@@ -73,97 +73,131 @@ func CreateOrganization(c *gin.Context) {
 
 	if err := tx.Create(&teamUser).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add user to general team"})
+		RespondInternalError(c, "Failed to add user to general team")
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+		RespondInternalError(c, "Failed to commit transaction")
 		return
 	}
 
-	c.JSON(http.StatusCreated, org)
+	RespondCreated(c, org)
 }
 
 func GetOrganizations(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	var orgs []models.Organization
-
+	type OrgWithRole struct {
+		models.Organization
+		Role string
+	}
+	var orgsWithRole []OrgWithRole
 	err := database.DB.Model(&models.Organization{}).
+		Select("organizations.*, organization_users.role").
 		Joins("JOIN organization_users ON organization_users.organization_id = organizations.id").
 		Where("organization_users.user_id = ?", uid).
-		Preload("Teams").
-		Find(&orgs).Error
+		Scan(&orgsWithRole).Error
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch organizations"})
+		RespondInternalError(c, "Failed to fetch organizations")
 		return
+	}
+
+	if len(orgsWithRole) == 0 {
+		RespondOK(c, []any{})
+		return
+	}
+
+	orgIDs := make([]uuid.UUID, len(orgsWithRole))
+	for i, org := range orgsWithRole {
+		orgIDs[i] = org.ID
+	}
+
+	type CountResult struct {
+		OrganizationID uuid.UUID
+		Count          int64
+	}
+	var memberCounts []CountResult
+	database.DB.Model(&models.OrganizationUser{}).
+		Select("organization_id, COUNT(*) as count").
+		Where("organization_id IN ?", orgIDs).
+		Group("organization_id").
+		Scan(&memberCounts)
+
+	memberCountMap := make(map[uuid.UUID]int64)
+	for _, mc := range memberCounts {
+		memberCountMap[mc.OrganizationID] = mc.Count
+	}
+
+	var projectCounts []CountResult
+	database.DB.Model(&models.Project{}).
+		Select("organization_id, COUNT(*) as count").
+		Where("organization_id IN ?", orgIDs).
+		Group("organization_id").
+		Scan(&projectCounts)
+
+	projectCountMap := make(map[uuid.UUID]int64)
+	for _, pc := range projectCounts {
+		projectCountMap[pc.OrganizationID] = pc.Count
 	}
 
 	type OrganizationResponse struct {
 		models.Organization
-		Role string `json:"role"`
-		ProjectCount int64 `json:"projectCount"`
-		MemberCount  int64 `json:"memberCount"`
+		Role         string `json:"role"`
+		ProjectCount int64  `json:"projectCount"`
+		MemberCount  int64  `json:"memberCount"`
 	}
 
-	response := []OrganizationResponse{}
-	for _, org := range orgs {
-		var role string
-		database.DB.Model(&models.OrganizationUser{}).
-			Select("role").
-			Where("organization_id = ? AND user_id = ?", org.ID, uid).
-			Scan(&role)
-
-		var memberCount int64
-		database.DB.Model(&models.OrganizationUser{}).Where("organization_id = ?", org.ID).Count(&memberCount)
-
-		var projectCount int64
-		database.DB.Model(&models.Project{}).Where("organization_id = ?", org.ID).Count(&projectCount)
-
-		response = append(response, OrganizationResponse{
-			Organization: org,
-			Role:         role,
-			MemberCount:  memberCount,
-			ProjectCount: projectCount,
-		})
+	response := make([]OrganizationResponse, len(orgsWithRole))
+	for i, org := range orgsWithRole {
+		response[i] = OrganizationResponse{
+			Organization: org.Organization,
+			Role:         org.Role,
+			MemberCount:  memberCountMap[org.ID],
+			ProjectCount: projectCountMap[org.ID],
+		}
 	}
 
-	c.JSON(http.StatusOK, response)
+	RespondOK(c, response)
 }
 
 func GetOrganization(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	orgIDStr := c.Param("id")
-	orgID, err := uuid.Parse(orgIDStr)
-
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+	uid, ok := GetAuthUserID(c)
+	if !ok {
 		return
 	}
 
-	var org models.Organization
-	err = database.DB.Model(&models.Organization{}).
+	orgID, ok := ParseUUIDParam(c, "id", "organization")
+	if !ok {
+		return
+	}
+
+	type OrgWithUserInfo struct {
+		models.Organization
+		Role                     string
+		EncryptedOrganizationKey *string
+	}
+	var result OrgWithUserInfo
+	err := database.DB.Model(&models.Organization{}).
+		Select("organizations.*, organization_users.role, organization_users.encrypted_organization_key").
 		Joins("JOIN organization_users ON organization_users.organization_id = organizations.id").
 		Where("organizations.id = ? AND organization_users.user_id = ?", orgID, uid).
-		First(&org).Error
+		Scan(&result).Error
 
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Organization not found"})
+	if err != nil || result.ID == uuid.Nil {
+		RespondNotFound(c, "Organization not found")
 		return
 	}
 
-	var orgUser models.OrganizationUser
-	database.DB.Where("organization_id = ? AND user_id = ?", org.ID, uid).First(&orgUser)
-
-	c.JSON(http.StatusOK, gin.H{
-		"organization":             org,
-		"role":                     orgUser.Role,
-		"encryptedOrganizationKey": orgUser.EncryptedOrganizationKey,
+	RespondOK(c, gin.H{
+		"organization":             result.Organization,
+		"role":                     result.Role,
+		"encryptedOrganizationKey": result.EncryptedOrganizationKey,
 	})
 }
 
@@ -172,87 +206,74 @@ type UpdateOrganizationRequest struct {
 }
 
 func UpdateOrganization(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	orgIDStr := c.Param("id")
-	orgID, err := uuid.Parse(orgIDStr)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+	orgID, ok := ParseUUIDParam(c, "id", "organization")
+	if !ok {
 		return
 	}
 
 	var req UpdateOrganizationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
-	var orgUser models.OrganizationUser
-	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, uid).First(&orgUser).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
-		return
-	}
-
-	if orgUser.Role != "owner" && orgUser.Role != "Owner" && orgUser.Role != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners and admins can update organization settings"})
+	_, ok = RequireOrgAdmin(c, uid, orgID)
+	if !ok {
 		return
 	}
 
 	if err := database.DB.Model(&models.Organization{}).Where("id = ?", orgID).Update("name", req.Name).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update organization"})
+		RespondInternalError(c, "Failed to update organization")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Organization updated"})
+	RespondMessage(c, "Organization updated")
 }
 
 func GetOrganizationUsers(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	orgIDStr := c.Param("id")
-	orgID, err := uuid.Parse(orgIDStr)
-
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+	uid, ok := GetAuthUserID(c)
+	if !ok {
 		return
 	}
 
-	var requester models.OrganizationUser
-	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, uid).First(&requester).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+	orgID, ok := ParseUUIDParam(c, "id", "organization")
+	if !ok {
 		return
 	}
 
-	var users []models.User
+	_, ok = RequireOrgMembership(c, uid, orgID)
+	if !ok {
+		return
+	}
+
+	// Single query to get users with their roles
+	type UserWithRole struct {
+		ID        uuid.UUID `json:"id"`
+		Name      string    `json:"name"`
+		Email     string    `json:"email"`
+		AvatarURL string    `json:"avatarUrl"`
+		PublicKey *string   `json:"publicKey"`
+		CreatedAt string    `json:"createdAt"`
+		UpdatedAt string    `json:"updatedAt"`
+		Role      string    `json:"role"`
+	}
+
+	var users []UserWithRole
 	if err := database.DB.Model(&models.User{}).
+		Select("users.id, users.name, users.email, users.avatar_url, users.public_key, users.created_at, users.updated_at, organization_users.role").
 		Joins("JOIN organization_users ON organization_users.user_id = users.id").
 		Where("organization_users.organization_id = ?", orgID).
-		Find(&users).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch organization users"})
+		Scan(&users).Error; err != nil {
+		RespondInternalError(c, "Failed to fetch organization users")
 		return
 	}
 
-	type OrgUserResponse struct {
-		models.User
-		Role string `json:"role"`
-	}
-
-	response := []OrgUserResponse{}
-	for _, u := range users {
-		var role string
-		database.DB.Model(&models.OrganizationUser{}).
-			Select("role").
-			Where("organization_id = ? AND user_id = ?", orgID, u.ID).
-			Scan(&role)
-
-		response = append(response, OrgUserResponse{
-			User: u,
-			Role: role,
-		})
-	}
-
-	c.JSON(http.StatusOK, response)
+	RespondOK(c, users)
 }
 
 type AddOrganizationMemberRequest struct {
@@ -262,19 +283,19 @@ type AddOrganizationMemberRequest struct {
 }
 
 func AddOrganizationMember(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	requesterUID := userID.(uuid.UUID)
-	orgIDStr := c.Param("id")
-	orgID, err := uuid.Parse(orgIDStr)
+	requesterUID, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+	orgID, ok := ParseUUIDParam(c, "id", "organization")
+	if !ok {
 		return
 	}
 
 	var req AddOrganizationMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
@@ -282,48 +303,41 @@ func AddOrganizationMember(c *gin.Context) {
 		req.Role = "member"
 	}
 
-	validRoles := map[string]bool{"owner": true, "admin": true, "member": true}
-	if !validRoles[req.Role] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Must be owner, admin, or member"})
+	if !IsValidRole(req.Role) {
+		RespondBadRequest(c, "Invalid role. Must be owner, admin, or member")
 		return
 	}
 
-	var requesterOrgUser models.OrganizationUser
-	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, requesterUID).First(&requesterOrgUser).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+	requesterOrgUser, ok := RequireOrgAdmin(c, requesterUID, orgID)
+	if !ok {
 		return
 	}
 
-	if requesterOrgUser.Role != "owner" && requesterOrgUser.Role != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners and admins can add members"})
-		return
-	}
-
-	if req.Role == "owner" && requesterOrgUser.Role != "owner" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners can add other owners"})
+	if req.Role == "owner" && !IsOwner(requesterOrgUser.Role) {
+		RespondForbidden(c, "Only organization owners can add other owners")
 		return
 	}
 
 	// Verify target user exists and has public key
 	var targetUser models.User
 	if err := database.DB.First(&targetUser, "id = ?", req.UserID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Target user not found"})
+		RespondNotFound(c, "Target user not found")
 		return
 	}
 
 	if targetUser.PublicKey == nil || *targetUser.PublicKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Target user has not set up encryption keys"})
+		RespondBadRequest(c, "Target user has not set up encryption keys")
 		return
 	}
 
 	var existingMembership models.OrganizationUser
 	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, req.UserID).First(&existingMembership).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "User is already a member of this organization"})
+		RespondConflict(c, "User is already a member of this organization")
 		return
 	}
 
 	if (req.Role == "admin" || req.Role == "owner") && (req.EncryptedOrganizationKey == nil || *req.EncryptedOrganizationKey == "") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "encryptedOrganizationKey is required for admin and owner roles"})
+		RespondBadRequest(c, "encryptedOrganizationKey is required for admin and owner roles")
 		return
 	}
 
@@ -335,11 +349,11 @@ func AddOrganizationMember(c *gin.Context) {
 	}
 
 	if err := database.DB.Create(&orgUser).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add member to organization"})
+		RespondInternalError(c, "Failed to add member to organization")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
+	RespondCreated(c, gin.H{
 		"message": "Member added successfully",
 		"userId":  req.UserID,
 		"role":    req.Role,
@@ -352,75 +366,65 @@ type UpdateOrganizationMemberRequest struct {
 }
 
 func UpdateOrganizationMember(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	requesterUID := userID.(uuid.UUID)
-	orgIDStr := c.Param("id")
-	targetUserIDStr := c.Param("userId")
-
-	orgID, err := uuid.Parse(orgIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+	requesterUID, ok := GetAuthUserID(c)
+	if !ok {
 		return
 	}
 
-	targetUserID, err := uuid.Parse(targetUserIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	orgID, ok := ParseUUIDParam(c, "id", "organization")
+	if !ok {
+		return
+	}
+
+	targetUserID, ok := ParseUUIDParam(c, "userId", "user")
+	if !ok {
 		return
 	}
 
 	var req UpdateOrganizationMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
-	validRoles := map[string]bool{"owner": true, "admin": true, "member": true}
-	if !validRoles[req.Role] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Must be owner, admin, or member"})
+	if !IsValidRole(req.Role) {
+		RespondBadRequest(c, "Invalid role. Must be owner, admin, or member")
 		return
 	}
 
-	var requesterOrgUser models.OrganizationUser
-	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, requesterUID).First(&requesterOrgUser).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
-		return
-	}
-
-	if requesterOrgUser.Role != "owner" && requesterOrgUser.Role != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners and admins can update members"})
+	requesterOrgUser, ok := RequireOrgAdmin(c, requesterUID, orgID)
+	if !ok {
 		return
 	}
 
 	var targetOrgUser models.OrganizationUser
 	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, targetUserID).First(&targetOrgUser).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Member not found"})
+		RespondNotFound(c, "Member not found")
 		return
 	}
 
-	if (targetOrgUser.Role == "owner" || req.Role == "owner") && requesterOrgUser.Role != "owner" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners can modify owner roles"})
+	if (IsOwner(targetOrgUser.Role) || req.Role == "owner") && !IsOwner(requesterOrgUser.Role) {
+		RespondForbidden(c, "Only organization owners can modify owner roles")
 		return
 	}
 
-	if requesterUID == targetUserID && targetOrgUser.Role == "owner" && req.Role != "owner" {
+	if requesterUID == targetUserID && IsOwner(targetOrgUser.Role) && req.Role != "owner" {
 		var ownerCount int64
-
 		database.DB.Model(&models.OrganizationUser{}).Where("organization_id = ? AND role = ?", orgID, "owner").Count(&ownerCount)
 		if ownerCount <= 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot demote the last owner"})
+			RespondBadRequest(c, "Cannot demote the last owner")
 			return
 		}
 	}
 
 	if (req.Role == "admin" || req.Role == "owner") && targetOrgUser.Role == "member" {
 		if req.EncryptedOrganizationKey == nil || *req.EncryptedOrganizationKey == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "encryptedOrganizationKey is required when promoting to admin or owner"})
+			RespondBadRequest(c, "encryptedOrganizationKey is required when promoting to admin or owner")
 			return
 		}
 	}
 
-	updates := map[string]interface{}{"role": req.Role}
+	updates := map[string]any{"role": req.Role}
 	if req.Role == "member" {
 		updates["encrypted_organization_key"] = nil
 	} else if req.EncryptedOrganizationKey != nil {
@@ -428,11 +432,11 @@ func UpdateOrganizationMember(c *gin.Context) {
 	}
 
 	if err := database.DB.Model(&targetOrgUser).Updates(updates).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update member"})
+		RespondInternalError(c, "Failed to update member")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	RespondOK(c, gin.H{
 		"message": "Member updated successfully",
 		"userId":  targetUserID,
 		"role":    req.Role,
@@ -440,50 +444,42 @@ func UpdateOrganizationMember(c *gin.Context) {
 }
 
 func RemoveOrganizationMember(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	requesterUID := userID.(uuid.UUID)
-	orgIDStr := c.Param("id")
-	targetUserIDStr := c.Param("userId")
-
-	orgID, err := uuid.Parse(orgIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+	requesterUID, ok := GetAuthUserID(c)
+	if !ok {
 		return
 	}
 
-	targetUserID, err := uuid.Parse(targetUserIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	orgID, ok := ParseUUIDParam(c, "id", "organization")
+	if !ok {
 		return
 	}
 
-	var requesterOrgUser models.OrganizationUser
-	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, requesterUID).First(&requesterOrgUser).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+	targetUserID, ok := ParseUUIDParam(c, "userId", "user")
+	if !ok {
 		return
 	}
 
-	if requesterOrgUser.Role != "owner" && requesterOrgUser.Role != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners and admins can remove members"})
+	requesterOrgUser, ok := RequireOrgAdmin(c, requesterUID, orgID)
+	if !ok {
 		return
 	}
 
 	var targetOrgUser models.OrganizationUser
 	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, targetUserID).First(&targetOrgUser).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Member not found"})
+		RespondNotFound(c, "Member not found")
 		return
 	}
 
-	if targetOrgUser.Role == "owner" && requesterOrgUser.Role != "owner" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only organization owners can remove other owners"})
+	if IsOwner(targetOrgUser.Role) && !IsOwner(requesterOrgUser.Role) {
+		RespondForbidden(c, "Only organization owners can remove other owners")
 		return
 	}
 
-	if requesterUID == targetUserID && targetOrgUser.Role == "owner" {
+	if requesterUID == targetUserID && IsOwner(targetOrgUser.Role) {
 		var ownerCount int64
 		database.DB.Model(&models.OrganizationUser{}).Where("organization_id = ? AND role = ?", orgID, "owner").Count(&ownerCount)
 		if ownerCount <= 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove the last owner"})
+			RespondBadRequest(c, "Cannot remove the last owner")
 			return
 		}
 	}
@@ -492,22 +488,22 @@ func RemoveOrganizationMember(c *gin.Context) {
 
 	if err := tx.Where("user_id = ? AND team_id IN (SELECT id FROM teams WHERE organization_id = ?)", targetUserID, orgID).Delete(&models.TeamUser{}).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove member from teams"})
+		RespondInternalError(c, "Failed to remove member from teams")
 		return
 	}
 
 	if err := tx.Delete(&targetOrgUser).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove member"})
+		RespondInternalError(c, "Failed to remove member")
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+		RespondInternalError(c, "Failed to commit transaction")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	RespondOK(c, gin.H{
 		"message": "Member removed successfully",
 		"userId":  targetUserID,
 	})

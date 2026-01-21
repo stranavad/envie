@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"net/http"
-
 	"envie-backend/internal/database"
 	"envie-backend/internal/models"
 
@@ -18,12 +16,14 @@ type CreateTeamRequest struct {
 }
 
 func CreateTeam(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
 	var req CreateTeamRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
@@ -32,11 +32,10 @@ func CreateTeam(c *gin.Context) {
 	var orgUser models.OrganizationUser
 	if err := tx.Where("organization_id = ? AND user_id = ?", req.OrganizationID, uid).First(&orgUser).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this organization"})
+		RespondForbidden(c, "You are not a member of this organization")
 		return
 	}
 
-	// 2. Create Team
 	team := models.Team{
 		Name:           req.Name,
 		OrganizationID: req.OrganizationID,
@@ -45,109 +44,167 @@ func CreateTeam(c *gin.Context) {
 
 	if err := tx.Create(&team).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create team"})
+		RespondInternalError(c, "Failed to create team")
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+		RespondInternalError(c, "Failed to commit transaction")
 		return
 	}
 
-	c.JSON(http.StatusCreated, team)
+	RespondCreated(c, team)
 }
 
 func GetTeams(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	orgIDStr := c.Query("organizationId")
-
-	if orgIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "organizationId query parameter required"})
+	uid, ok := GetAuthUserID(c)
+	if !ok {
 		return
 	}
 
-	orgID, err := uuid.Parse(orgIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization ID"})
+	orgID, ok := ParseUUIDQuery(c, "organizationId", "organization")
+	if !ok {
 		return
 	}
 
-	var orgUser models.OrganizationUser
-	if err := database.DB.Where("organization_id = ? AND user_id = ?", orgID, uid).First(&orgUser).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+	_, ok = RequireOrgMembership(c, uid, orgID)
+	if !ok {
 		return
 	}
 
 	var teams []models.Team
 	if err := database.DB.Where("organization_id = ?", orgID).Find(&teams).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch teams"})
+		RespondInternalError(c, "Failed to fetch teams")
 		return
 	}
 
-	type TeamResponse struct {
-		models.Team
-		MemberCount  int64 `json:"memberCount"`
-		ProjectCount int64 `json:"projectCount"`
-		PreviewUsers     []models.User `json:"previewUsers"`
-		UserEncryptedKey string        `json:"userEncryptedKey"`
+	if len(teams) == 0 {
+		RespondOK(c, []any{})
+		return
 	}
 
-	response := []TeamResponse{}
-	for _, team := range teams {
-		var memberCount int64
-		database.DB.Model(&models.TeamUser{}).Where("team_id = ?", team.ID).Count(&memberCount)
+	teamIDs := make([]uuid.UUID, len(teams))
+	for i, t := range teams {
+		teamIDs[i] = t.ID
+	}
 
-		var projectCount int64
-		database.DB.Model(&models.TeamProject{}).Where("team_id = ?", team.ID).Count(&projectCount)
+	type CountResult struct {
+		TeamID uuid.UUID
+		Count  int64
+	}
+	var memberCounts []CountResult
+	database.DB.Model(&models.TeamUser{}).
+		Select("team_id, COUNT(*) as count").
+		Where("team_id IN ?", teamIDs).
+		Group("team_id").
+		Scan(&memberCounts)
 
-		var previewUsers []models.User
-		// Get first 5 users
-		database.DB.Model(&models.User{}).
-			Joins("JOIN team_users ON team_users.user_id = users.id").
-			Where("team_users.team_id = ?", team.ID).
-			Limit(5).
-			Find(&previewUsers)
+	memberCountMap := make(map[uuid.UUID]int64)
+	for _, mc := range memberCounts {
+		memberCountMap[mc.TeamID] = mc.Count
+	}
 
-		var userEncryptedKey string
-		database.DB.Model(&models.TeamUser{}).
-			Select("encrypted_team_key").
-			Where("team_id = ? AND user_id = ?", team.ID, uid).
-			Scan(&userEncryptedKey)
+	var projectCounts []CountResult
+	database.DB.Model(&models.TeamProject{}).
+		Select("team_id, COUNT(*) as count").
+		Where("team_id IN ?", teamIDs).
+		Group("team_id").
+		Scan(&projectCounts)
 
-		response = append(response, TeamResponse{
-			Team:             team,
-			MemberCount:      memberCount,
-			ProjectCount:     projectCount,
-			PreviewUsers:     previewUsers,
-			UserEncryptedKey: userEncryptedKey,
+	projectCountMap := make(map[uuid.UUID]int64)
+	for _, pc := range projectCounts {
+		projectCountMap[pc.TeamID] = pc.Count
+	}
+
+	type TeamKeyResult struct {
+		TeamID           uuid.UUID
+		EncryptedTeamKey string
+	}
+	var teamKeys []TeamKeyResult
+	database.DB.Model(&models.TeamUser{}).
+		Select("team_id, encrypted_team_key").
+		Where("team_id IN ? AND user_id = ?", teamIDs, uid).
+		Scan(&teamKeys)
+
+	teamKeyMap := make(map[uuid.UUID]string)
+	for _, tk := range teamKeys {
+		teamKeyMap[tk.TeamID] = tk.EncryptedTeamKey
+	}
+
+	// Fetch all team users for the requested teams
+	type TeamUserResult struct {
+		TeamID    uuid.UUID
+		ID        uuid.UUID
+		Name      string
+		Email     string
+		AvatarURL string `gorm:"column:avatar_url"`
+	}
+	var teamUserResults []TeamUserResult
+	database.DB.Model(&models.TeamUser{}).
+		Select("team_users.team_id, users.id, users.name, users.email, users.avatar_url").
+		Joins("JOIN users ON users.id = team_users.user_id").
+		Where("team_users.team_id IN ?", teamIDs).
+		Order("team_users.created_at").
+		Scan(&teamUserResults)
+
+	// Group users by team
+	teamUsersMap := make(map[uuid.UUID][]models.User)
+	for _, tu := range teamUserResults {
+		teamUsersMap[tu.TeamID] = append(teamUsersMap[tu.TeamID], models.User{
+			ID:        tu.ID,
+			Name:      tu.Name,
+			Email:     tu.Email,
+			AvatarURL: tu.AvatarURL,
 		})
 	}
 
-	c.JSON(http.StatusOK, response)
+	// Build response
+	type TeamResponse struct {
+		models.Team
+		MemberCount      int64         `json:"memberCount"`
+		ProjectCount     int64         `json:"projectCount"`
+		Users            []models.User `json:"users"`
+		UserEncryptedKey string        `json:"userEncryptedKey"`
+	}
+
+	response := make([]TeamResponse, len(teams))
+	for i, team := range teams {
+		users := teamUsersMap[team.ID]
+		if users == nil {
+			users = []models.User{}
+		}
+		response[i] = TeamResponse{
+			Team:             team,
+			MemberCount:      memberCountMap[team.ID],
+			ProjectCount:     projectCountMap[team.ID],
+			Users:            users,
+			UserEncryptedKey: teamKeyMap[team.ID],
+		}
+	}
+
+	RespondOK(c, response)
 }
 
 func GetTeamMembers(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	teamIDStr := c.Param("id")
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	teamID, err := uuid.Parse(teamIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid team ID"})
+	teamID, ok := ParseUUIDParam(c, "id", "team")
+	if !ok {
 		return
 	}
 
 	var team models.Team
 	if err := database.DB.First(&team, "id = ?", teamID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Team not found"})
+		RespondNotFound(c, "Team not found")
 		return
 	}
 
-	var orgUser models.OrganizationUser
-	if err := database.DB.Where("organization_id = ? AND user_id = ?", team.OrganizationID, uid).First(&orgUser).Error; err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+	_, ok = RequireOrgMembership(c, uid, team.OrganizationID)
+	if !ok {
 		return
 	}
 
@@ -167,7 +224,7 @@ func GetTeamMembers(c *gin.Context) {
 		Where("team_users.team_id = ?", teamID).
 		Scan(&members)
 
-	c.JSON(http.StatusOK, members)
+	RespondOK(c, members)
 }
 
 type AddTeamMemberRequest struct {
@@ -178,43 +235,43 @@ type AddTeamMemberRequest struct {
 
 // AddTeamMember adds a user to a team
 func AddTeamMember(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	teamIDStr := c.Param("id")
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	teamID, err := uuid.Parse(teamIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid team ID"})
+	teamID, ok := ParseUUIDParam(c, "id", "team")
+	if !ok {
 		return
 	}
 
 	var req AddTeamMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
 	var team models.Team
 	if err := database.DB.First(&team, "id = ?", teamID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Team not found"})
+		RespondNotFound(c, "Team not found")
 		return
 	}
 
 	canManage, err := canManageTeam(uid, teamID, team.OrganizationID)
 	if err != nil || !canManage {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You don't have permission to add members to this team"})
+		RespondForbidden(c, "You don't have permission to add members to this team")
 		return
 	}
 
 	var targetOrgUser models.OrganizationUser
 	if err := database.DB.Where("organization_id = ? AND user_id = ?", team.OrganizationID, req.UserID).First(&targetOrgUser).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "User is not a member of this organization"})
+		RespondBadRequest(c, "User is not a member of this organization")
 		return
 	}
 
 	var existingMember models.TeamUser
 	if err := database.DB.Where("team_id = ? AND user_id = ?", teamID, req.UserID).First(&existingMember).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "User is already a member of this team"})
+		RespondConflict(c, "User is already a member of this team")
 		return
 	}
 
@@ -231,11 +288,11 @@ func AddTeamMember(c *gin.Context) {
 	}
 
 	if err := database.DB.Create(&teamUser).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add member to team"})
+		RespondInternalError(c, "Failed to add member to team")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"message": "Member added successfully"})
+	RespondCreated(c, gin.H{"message": "Member added successfully"})
 }
 
 type UpdateTeamMemberRequest struct {
@@ -243,38 +300,36 @@ type UpdateTeamMemberRequest struct {
 }
 
 func UpdateTeamMember(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	teamIDStr := c.Param("id")
-	memberIDStr := c.Param("userId")
-
-	teamID, err := uuid.Parse(teamIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid team ID"})
+	uid, ok := GetAuthUserID(c)
+	if !ok {
 		return
 	}
 
-	memberID, err := uuid.Parse(memberIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	teamID, ok := ParseUUIDParam(c, "id", "team")
+	if !ok {
+		return
+	}
+
+	memberID, ok := ParseUUIDParam(c, "userId", "user")
+	if !ok {
 		return
 	}
 
 	var req UpdateTeamMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
 	var team models.Team
 	if err := database.DB.First(&team, "id = ?", teamID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Team not found"})
+		RespondNotFound(c, "Team not found")
 		return
 	}
 
 	canManage, err := canManageTeam(uid, teamID, team.OrganizationID)
 	if err != nil || !canManage {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You don't have permission to manage this team"})
+		RespondForbidden(c, "You don't have permission to manage this team")
 		return
 	}
 
@@ -285,7 +340,7 @@ func UpdateTeamMember(c *gin.Context) {
 			var currentMember models.TeamUser
 			if err := database.DB.Where("team_id = ? AND user_id = ?", teamID, uid).First(&currentMember).Error; err == nil {
 				if currentMember.Role == "owner" {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot demote yourself as you are the only team owner"})
+					RespondBadRequest(c, "Cannot demote yourself as you are the only team owner")
 					return
 				}
 			}
@@ -297,48 +352,46 @@ func UpdateTeamMember(c *gin.Context) {
 		Update("role", req.Role)
 
 	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Team member not found"})
+		RespondNotFound(c, "Team member not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Member role updated successfully"})
+	RespondMessage(c, "Member role updated successfully")
 }
 
 func RemoveTeamMember(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	teamIDStr := c.Param("id")
-	memberIDStr := c.Param("userId")
-
-	teamID, err := uuid.Parse(teamIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid team ID"})
+	uid, ok := GetAuthUserID(c)
+	if !ok {
 		return
 	}
 
-	memberID, err := uuid.Parse(memberIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	teamID, ok := ParseUUIDParam(c, "id", "team")
+	if !ok {
+		return
+	}
+
+	memberID, ok := ParseUUIDParam(c, "userId", "user")
+	if !ok {
 		return
 	}
 
 	var team models.Team
 	if err := database.DB.First(&team, "id = ?", teamID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Team not found"})
+		RespondNotFound(c, "Team not found")
 		return
 	}
 
 	if memberID != uid {
 		canManage, err := canManageTeam(uid, teamID, team.OrganizationID)
 		if err != nil || !canManage {
-			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have permission to remove members from this team"})
+			RespondForbidden(c, "You don't have permission to remove members from this team")
 			return
 		}
 	}
 
 	var memberToRemove models.TeamUser
 	if err := database.DB.Where("team_id = ? AND user_id = ?", teamID, memberID).First(&memberToRemove).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Team member not found"})
+		RespondNotFound(c, "Team member not found")
 		return
 	}
 
@@ -346,18 +399,18 @@ func RemoveTeamMember(c *gin.Context) {
 		var ownerCount int64
 		database.DB.Model(&models.TeamUser{}).Where("team_id = ? AND role = ?", teamID, "owner").Count(&ownerCount)
 		if ownerCount <= 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove the only team owner. Transfer ownership first."})
+			RespondBadRequest(c, "Cannot remove the only team owner. Transfer ownership first.")
 			return
 		}
 	}
 
 	result := database.DB.Where("team_id = ? AND user_id = ?", teamID, memberID).Delete(&models.TeamUser{})
 	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Team member not found"})
+		RespondNotFound(c, "Team member not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Member removed successfully"})
+	RespondMessage(c, "Member removed successfully")
 }
 
 type UpdateMyTeamKeyRequest struct {
@@ -365,19 +418,19 @@ type UpdateMyTeamKeyRequest struct {
 }
 
 func UpdateMyTeamKey(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	teamIDStr := c.Param("id")
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	teamID, err := uuid.Parse(teamIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid team ID"})
+	teamID, ok := ParseUUIDParam(c, "id", "team")
+	if !ok {
 		return
 	}
 
 	var req UpdateMyTeamKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
@@ -386,16 +439,18 @@ func UpdateMyTeamKey(c *gin.Context) {
 		Update("encrypted_team_key", req.EncryptedTeamKey)
 
 	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "You are not a member of this team"})
+		RespondNotFound(c, "You are not a member of this team")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Team key updated successfully"})
+	RespondMessage(c, "Team key updated successfully")
 }
 
 func GetMyTeams(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
 	type TeamWithKey struct {
 		TeamID           uuid.UUID `json:"teamId"`
@@ -412,7 +467,7 @@ func GetMyTeams(c *gin.Context) {
 		Where("team_users.user_id = ?", uid).
 		Scan(&teams)
 
-	c.JSON(http.StatusOK, teams)
+	RespondOK(c, teams)
 }
 
 func canManageTeam(userID uuid.UUID, teamID uuid.UUID, orgID uuid.UUID) (bool, error) {

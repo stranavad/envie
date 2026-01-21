@@ -3,7 +3,6 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"net/http"
 	"strings"
 	"time"
 
@@ -28,25 +27,27 @@ func computeConfigChecksum(items []models.ConfigItem) string {
 func GetConfigItems(c *gin.Context) {
 	projectID := c.Param("id")
 	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Project ID required"})
+		RespondBadRequest(c, "Project ID required")
 		return
 	}
 
-	userIDVal, _ := c.Get("user_id")
-	userID := userIDVal.(uuid.UUID)
+	userID, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
 	if err := CheckProjectAccessSimple(userID, projectID); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Project not found or access denied"})
+		RespondForbidden(c, "Project not found or access denied")
 		return
 	}
 
 	var items []models.ConfigItem
 	if err := database.DB.Preload("Creator").Preload("Updater").Where("project_id = ?", projectID).Order("position asc").Find(&items).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch config items"})
+		RespondInternalError(c, "Failed to fetch config items")
 		return
 	}
 
-	c.JSON(http.StatusOK, items)
+	RespondOK(c, items)
 }
 
 type SyncConfigItemRequest struct {
@@ -54,35 +55,31 @@ type SyncConfigItemRequest struct {
 }
 
 func SyncConfigItems(c *gin.Context) {
-	projectID := c.Param("id")
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Project ID required"})
-		return
-	}
-	projectId, err := uuid.Parse(projectID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Project ID"})
+	projectId, ok := ParseUUIDParam(c, "id", "project")
+	if !ok {
 		return
 	}
 
-	uidVal, _ := c.Get("user_id")
-	userID := uidVal.(uuid.UUID)
+	userID, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err := CheckProjectAccessSimple(userID, projectID); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Project not found or access denied"})
+	if err := CheckProjectAccessSimple(userID, projectId.String()); err != nil {
+		RespondForbidden(c, "Project not found or access denied")
 		return
 	}
 
 	var req SyncConfigItemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
 	nameMap := make(map[string]bool)
 	for _, item := range req.Items {
 		if nameMap[item.Name] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Duplicate config key name: " + item.Name})
+			RespondBadRequest(c, "Duplicate config key name: "+item.Name)
 			return
 		}
 		nameMap[item.Name] = true
@@ -90,7 +87,7 @@ func SyncConfigItems(c *gin.Context) {
 
 	var existingItems []models.ConfigItem
 	if err := database.DB.Where("project_id = ?", projectId).Find(&existingItems).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Sync failed: " + err.Error()})
+		RespondInternalError(c, "Sync failed: "+err.Error())
 		return
 	}
 
@@ -198,7 +195,7 @@ func SyncConfigItems(c *gin.Context) {
 		}
 	}
 
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
 
 		if len(itemsToSave) > 0 {
 			if err := tx.Save(&itemsToSave).Error; err != nil {
@@ -226,9 +223,9 @@ func SyncConfigItems(c *gin.Context) {
 	})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Sync failed: " + err.Error()})
+		RespondInternalError(c, "Sync failed: "+err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Config synced successfully"})
+	RespondMessage(c, "Config synced successfully")
 }

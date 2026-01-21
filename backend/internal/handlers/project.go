@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"net/http"
 
 	"envie-backend/internal/database"
 	"envie-backend/internal/models"
@@ -57,21 +56,23 @@ type ProjectListItem struct {
 }
 
 func CreateProject(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
 	var req CreateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
 	var orgUser models.OrganizationUser
 	if err := database.DB.Where("user_id = ? AND organization_id = ?", uid, req.OrganizationID).First(&orgUser).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this organization"})
+			RespondForbidden(c, "You don't have access to this organization")
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error when checking access"})
+			RespondInternalError(c, "Internal error when checking access")
 		}
 		return
 	}
@@ -79,21 +80,21 @@ func CreateProject(c *gin.Context) {
 	var team models.Team
 	if err := database.DB.Where("id = ? AND organization_id = ?", req.TeamID, req.OrganizationID).First(&team).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Requested team not found in organization"})
+			RespondNotFound(c, "Requested team not found in organization")
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Internal error when checking team access"})
+			RespondInternalError(c, "Internal error when checking team access")
 		}
 		return
 	}
 
 	canCreate, err := CanUserCreateProjectInTeam(uid, req.TeamID, req.OrganizationID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error when checking permissions"})
+		RespondInternalError(c, "Internal error when checking permissions")
 		return
 	}
 
 	if !canCreate {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You don't have permissions to create projects in this team"})
+		RespondForbidden(c, "You don't have permissions to create projects in this team")
 		return
 	}
 
@@ -106,7 +107,7 @@ func CreateProject(c *gin.Context) {
 
 	if err := tx.Create(&projectData).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create project"})
+		RespondInternalError(c, "Failed to create project")
 		return
 	}
 
@@ -118,16 +119,16 @@ func CreateProject(c *gin.Context) {
 
 	if err := tx.Create(&teamProjectData).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed adding project to team"})
+		RespondInternalError(c, "Failed adding project to team")
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed creating project"})
+		RespondInternalError(c, "Failed creating project")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
+	RespondCreated(c, gin.H{
 		"id":             projectData.ID,
 		"name":           projectData.Name,
 		"organizationId": projectData.OrganizationID,
@@ -135,12 +136,14 @@ func CreateProject(c *gin.Context) {
 }
 
 func GetProjects(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
 	var teamUsers []models.TeamUser
 	if err := database.DB.Where("user_id = ?", uid).Find(&teamUsers).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch team memberships"})
+		RespondInternalError(c, "Failed to fetch team memberships")
 		return
 	}
 
@@ -153,7 +156,7 @@ func GetProjects(c *gin.Context) {
 
 	var orgUsers []models.OrganizationUser
 	if err := database.DB.Where("user_id = ? AND (role = 'owner' OR role = 'Owner' OR role = 'admin')", uid).Find(&orgUsers).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch organization memberships"})
+		RespondInternalError(c, "Failed to fetch organization memberships")
 		return
 	}
 
@@ -187,7 +190,7 @@ func GetProjects(c *gin.Context) {
 	}
 
 	if len(projectIDSet) == 0 {
-		c.JSON(http.StatusOK, []ProjectListItem{})
+		RespondOK(c, []ProjectListItem{})
 		return
 	}
 
@@ -198,7 +201,7 @@ func GetProjects(c *gin.Context) {
 
 	var dbProjects []models.Project
 	if err := database.DB.Where("id IN ?", uniqueProjectIDs).Order("updated_at DESC").Find(&dbProjects).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch projects"})
+		RespondInternalError(c, "Failed to fetch projects")
 		return
 	}
 
@@ -283,28 +286,28 @@ func GetProjects(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, projects)
+	RespondOK(c, projects)
 }
 
 func GetProject(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	projectIDStr := c.Param("id")
-	projectID, err := uuid.Parse(projectIDStr)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+	projectID, ok := ParseUUIDParam(c, "id", "project")
+	if !ok {
 		return
 	}
 
 	access, err := GetUserProjectAccess(uid, projectID)
 	if err != nil {
 		if err.Error() == "project not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+			RespondNotFound(c, "Project not found")
 		} else if err.Error() == "access denied" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+			RespondForbidden(c, "Access denied")
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check access"})
+			RespondInternalError(c, "Failed to check access")
 		}
 		return
 	}
@@ -336,72 +339,72 @@ func GetProject(c *gin.Context) {
 		response.TeamName = access.Team.Name
 	}
 
-	c.JSON(http.StatusOK, response)
+	RespondOK(c, response)
 }
 
 func UpdateProject(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	projectIDStr := c.Param("id")
-	projectID, err := uuid.Parse(projectIDStr)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+	projectID, ok := ParseUUIDParam(c, "id", "project")
+	if !ok {
 		return
 	}
 
 	var req UpdateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
 	access, err := GetUserProjectAccess(uid, projectID)
 	if err != nil {
 		if err.Error() == "access denied" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+			RespondForbidden(c, "Access denied")
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify access"})
+			RespondInternalError(c, "Failed to verify access")
 		}
 		return
 	}
 
 	if !access.CanEdit {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You don't have permission to edit this project"})
+		RespondForbidden(c, "You don't have permission to edit this project")
 		return
 	}
 
 	if err := database.DB.Model(&models.Project{}).Where("id = ?", projectID).Update("name", req.Name).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update project"})
+		RespondInternalError(c, "Failed to update project")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Project updated"})
+	RespondMessage(c, "Project updated")
 }
 
 func DeleteProject(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	projectIDStr := c.Param("id")
-	projectID, err := uuid.Parse(projectIDStr)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+	projectID, ok := ParseUUIDParam(c, "id", "project")
+	if !ok {
 		return
 	}
 
 	access, err := GetUserProjectAccess(uid, projectID)
 	if err != nil {
 		if err.Error() == "access denied" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+			RespondForbidden(c, "Access denied")
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify access"})
+			RespondInternalError(c, "Failed to verify access")
 		}
 		return
 	}
 
 	if !access.CanDelete {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only team owners or organization owners can delete projects"})
+		RespondForbidden(c, "Only team owners or organization owners can delete projects")
 		return
 	}
 
@@ -409,22 +412,22 @@ func DeleteProject(c *gin.Context) {
 
 	if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(&models.TeamProject{}).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete project associations"})
+		RespondInternalError(c, "Failed to delete project associations")
 		return
 	}
 
 	if err := tx.Unscoped().Delete(&models.Project{}, "id = ?", projectID).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete project"})
+		RespondInternalError(c, "Failed to delete project")
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete project"})
+		RespondInternalError(c, "Failed to delete project")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Project deleted"})
+	RespondMessage(c, "Project deleted")
 }
 
 type TeamWithUsers struct {
@@ -458,113 +461,173 @@ type ProjectAccessResponse struct {
 }
 
 func GetProjectTeams(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	projectIDStr := c.Param("id")
-	projectID, err := uuid.Parse(projectIDStr)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+	projectID, ok := ParseUUIDParam(c, "id", "project")
+	if !ok {
 		return
 	}
 
 	access, err := GetUserProjectAccess(uid, projectID)
 	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		RespondForbidden(c, "Access denied")
 		return
-	}
-
-	var teamProjects []models.TeamProject
-	if err := database.DB.Where("project_id = ?", projectID).Find(&teamProjects).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch project teams"})
-		return
-	}
-
-	teams := []TeamWithUsers{}
-	teamIDsWithAccess := make(map[uuid.UUID]bool)
-
-	for _, tp := range teamProjects {
-		teamIDsWithAccess[tp.TeamID] = true
-
-		var team models.Team
-		if err := database.DB.Where("id = ?", tp.TeamID).First(&team).Error; err != nil {
-			continue
-		}
-
-		var memberCount int64
-		database.DB.Model(&models.TeamUser{}).Where("team_id = ?", team.ID).Count(&memberCount)
-
-		var projectCount int64
-		database.DB.Model(&models.TeamProject{}).Where("team_id = ?", team.ID).Count(&projectCount)
-
-		var teamUsers []models.TeamUser
-		database.DB.Where("team_id = ?", team.ID).Find(&teamUsers)
-
-		users := []TeamUserInfo{}
-		for _, tu := range teamUsers {
-			var user models.User
-			if err := database.DB.Where("id = ?", tu.UserID).First(&user).Error; err == nil {
-				users = append(users, TeamUserInfo{
-					ID:        user.ID,
-					Name:      user.Name,
-					Email:     user.Email,
-					AvatarURL: user.AvatarURL,
-					Role:      tu.Role,
-				})
-			}
-		}
-
-		teams = append(teams, TeamWithUsers{
-			ID:           team.ID,
-			Name:         team.Name,
-			MemberCount:  memberCount,
-			ProjectCount: projectCount,
-			Users:        users,
-		})
-	}
-
-	var orgUsers []models.OrganizationUser
-	database.DB.Where("organization_id = ? AND (role = 'owner' OR role = 'Owner' OR role = 'admin')", access.Project.OrganizationID).Find(&orgUsers)
-
-	orgAdmins := []OrgUserInfo{}
-	for _, ou := range orgUsers {
-		var user models.User
-		if err := database.DB.Where("id = ?", ou.UserID).First(&user).Error; err == nil {
-			orgAdmins = append(orgAdmins, OrgUserInfo{
-				ID:        user.ID,
-				Name:      user.Name,
-				Email:     user.Email,
-				AvatarURL: user.AvatarURL,
-				Role:      ou.Role,
-			})
-		}
 	}
 
 	var allOrgTeams []models.Team
 	database.DB.Where("organization_id = ?", access.Project.OrganizationID).Find(&allOrgTeams)
 
+	if len(allOrgTeams) == 0 {
+		RespondOK(c, ProjectAccessResponse{
+			Teams:              []TeamWithUsers{},
+			OrganizationAdmins: []OrgUserInfo{},
+			AvailableTeams:     []TeamWithUsers{},
+		})
+		return
+	}
+
+	var teamProjects []models.TeamProject
+	database.DB.Where("project_id = ?", projectID).Find(&teamProjects)
+
+	teamIDsWithAccess := make(map[uuid.UUID]bool)
+	for _, tp := range teamProjects {
+		teamIDsWithAccess[tp.TeamID] = true
+	}
+
+	allTeamIDs := make([]uuid.UUID, len(allOrgTeams))
+	for i, t := range allOrgTeams {
+		allTeamIDs[i] = t.ID
+	}
+
+	type CountResult struct {
+		TeamID uuid.UUID
+		Count  int64
+	}
+	var memberCounts []CountResult
+	database.DB.Model(&models.TeamUser{}).
+		Select("team_id, COUNT(*) as count").
+		Where("team_id IN ?", allTeamIDs).
+		Group("team_id").
+		Scan(&memberCounts)
+
+	memberCountMap := make(map[uuid.UUID]int64)
+	for _, mc := range memberCounts {
+		memberCountMap[mc.TeamID] = mc.Count
+	}
+
+	var projectCounts []CountResult
+	database.DB.Model(&models.TeamProject{}).
+		Select("team_id, COUNT(*) as count").
+		Where("team_id IN ?", allTeamIDs).
+		Group("team_id").
+		Scan(&projectCounts)
+
+	projectCountMap := make(map[uuid.UUID]int64)
+	for _, pc := range projectCounts {
+		projectCountMap[pc.TeamID] = pc.Count
+	}
+
+	accessTeamIDs := make([]uuid.UUID, 0, len(teamIDsWithAccess))
+	for teamID := range teamIDsWithAccess {
+		accessTeamIDs = append(accessTeamIDs, teamID)
+	}
+
+	teamUsersMap := make(map[uuid.UUID][]TeamUserInfo)
+	if len(accessTeamIDs) > 0 {
+		type TeamUserWithInfo struct {
+			TeamID    uuid.UUID
+			UserID    uuid.UUID
+			Name      string
+			Email     string
+			AvatarURL string `gorm:"column:avatar_url"`
+			Role      string
+		}
+		var teamUsersWithInfo []TeamUserWithInfo
+		database.DB.Model(&models.TeamUser{}).
+			Select("team_users.team_id, users.id as user_id, users.name, users.email, users.avatar_url, team_users.role").
+			Joins("JOIN users ON users.id = team_users.user_id").
+			Where("team_users.team_id IN ?", accessTeamIDs).
+			Scan(&teamUsersWithInfo)
+
+		for _, tu := range teamUsersWithInfo {
+			teamUsersMap[tu.TeamID] = append(teamUsersMap[tu.TeamID], TeamUserInfo{
+				ID:        tu.UserID,
+				Name:      tu.Name,
+				Email:     tu.Email,
+				AvatarURL: tu.AvatarURL,
+				Role:      tu.Role,
+			})
+		}
+	}
+
+	teams := []TeamWithUsers{}
+	teamMap := make(map[uuid.UUID]models.Team)
+	for _, team := range allOrgTeams {
+		teamMap[team.ID] = team
+	}
+
+	for teamID := range teamIDsWithAccess {
+		team, exists := teamMap[teamID]
+		if !exists {
+			continue
+		}
+		users := teamUsersMap[teamID]
+		if users == nil {
+			users = []TeamUserInfo{}
+		}
+		teams = append(teams, TeamWithUsers{
+			ID:           team.ID,
+			Name:         team.Name,
+			MemberCount:  memberCountMap[team.ID],
+			ProjectCount: projectCountMap[team.ID],
+			Users:        users,
+		})
+	}
+
+	// Build available teams (no access yet)
 	availableTeams := []TeamWithUsers{}
 	for _, team := range allOrgTeams {
 		if teamIDsWithAccess[team.ID] {
 			continue
 		}
-
-		var memberCount int64
-		database.DB.Model(&models.TeamUser{}).Where("team_id = ?", team.ID).Count(&memberCount)
-
-		var projectCount int64
-		database.DB.Model(&models.TeamProject{}).Where("team_id = ?", team.ID).Count(&projectCount)
-
 		availableTeams = append(availableTeams, TeamWithUsers{
 			ID:           team.ID,
 			Name:         team.Name,
-			MemberCount:  memberCount,
-			ProjectCount: projectCount,
+			MemberCount:  memberCountMap[team.ID],
+			ProjectCount: projectCountMap[team.ID],
 			Users:        []TeamUserInfo{},
 		})
 	}
 
-	c.JSON(http.StatusOK, ProjectAccessResponse{
+	type OrgAdminWithInfo struct {
+		UserID    uuid.UUID `gorm:"column:user_id"`
+		Name      string
+		Email     string
+		AvatarURL string `gorm:"column:avatar_url"`
+		Role      string
+	}
+	var orgAdminsWithInfo []OrgAdminWithInfo
+	database.DB.Model(&models.OrganizationUser{}).
+		Select("organization_users.user_id, users.name, users.email, users.avatar_url, organization_users.role").
+		Joins("JOIN users ON users.id = organization_users.user_id").
+		Where("organization_users.organization_id = ? AND (organization_users.role = 'owner' OR organization_users.role = 'Owner' OR organization_users.role = 'admin')", access.Project.OrganizationID).
+		Scan(&orgAdminsWithInfo)
+
+	orgAdmins := make([]OrgUserInfo, len(orgAdminsWithInfo))
+	for i, oa := range orgAdminsWithInfo {
+		orgAdmins[i] = OrgUserInfo{
+			ID:        oa.UserID,
+			Name:      oa.Name,
+			Email:     oa.Email,
+			AvatarURL: oa.AvatarURL,
+			Role:      oa.Role,
+		}
+	}
+
+	RespondOK(c, ProjectAccessResponse{
 		Teams:              teams,
 		OrganizationAdmins: orgAdmins,
 		AvailableTeams:     availableTeams,
@@ -577,42 +640,42 @@ type AddTeamToProjectRequest struct {
 }
 
 func AddTeamToProject(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
-	projectIDStr := c.Param("id")
-	projectID, err := uuid.Parse(projectIDStr)
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+	projectID, ok := ParseUUIDParam(c, "id", "project")
+	if !ok {
 		return
 	}
 
 	var req AddTeamToProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondBadRequest(c, err.Error())
 		return
 	}
 
 	access, err := GetUserProjectAccess(uid, projectID)
 	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		RespondForbidden(c, "Access denied")
 		return
 	}
 
 	if !access.CanEdit {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You don't have permission to modify this project"})
+		RespondForbidden(c, "You don't have permission to modify this project")
 		return
 	}
 
 	var team models.Team
 	if err := database.DB.Where("id = ? AND organization_id = ?", req.TeamID, access.Project.OrganizationID).First(&team).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Team not found in this organization"})
+		RespondBadRequest(c, "Team not found in this organization")
 		return
 	}
 
 	var existing models.TeamProject
 	if err := database.DB.Where("team_id = ? AND project_id = ?", req.TeamID, projectID).First(&existing).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "Team already has access to this project"})
+		RespondConflict(c, "Team already has access to this project")
 		return
 	}
 
@@ -623,9 +686,9 @@ func AddTeamToProject(c *gin.Context) {
 	}
 
 	if err := database.DB.Create(&teamProject).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add team to project"})
+		RespondInternalError(c, "Failed to add team to project")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"message": "Team added to project"})
+	RespondCreated(c, gin.H{"message": "Team added to project"})
 }

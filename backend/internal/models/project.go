@@ -12,7 +12,8 @@ type Project struct {
 	Name           string    `gorm:"size:255;not null" json:"name"`
 	OrganizationID uuid.UUID `gorm:"type:uuid;index" json:"organizationId"`
 
-	KeyVersion int `gorm:"default:1" json:"keyVersion"`
+	KeyVersion     int     `gorm:"default:1" json:"keyVersion"`
+	ConfigChecksum *string `gorm:"size:64" json:"configChecksum"`
 
 	CreatedAt            time.Time             `json:"createdAt"`
 	UpdatedAt            time.Time             `json:"updatedAt"`

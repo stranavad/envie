@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"envie-backend/internal/database"
@@ -11,6 +14,17 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+func computeConfigChecksum(items []models.ConfigItem) string {
+	var lines []string
+	for _, item := range items {
+		lines = append(lines, item.Name+"="+item.Value)
+	}
+
+	content := strings.Join(lines, "\n")
+	hash := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(hash[:])
+}
 func GetConfigItems(c *gin.Context) {
 	projectID := c.Param("id")
 	if projectID == "" {
@@ -196,6 +210,16 @@ func SyncConfigItems(c *gin.Context) {
 			if err := tx.Unscoped().Delete(&[]models.ConfigItem{}, itemsToDelete).Error; err != nil {
 				return err
 			}
+		}
+
+		var finalItems []models.ConfigItem
+		if err := tx.Where("project_id = ?", projectId).Order("position asc").Find(&finalItems).Error; err != nil {
+			return err
+		}
+
+		checksum := computeConfigChecksum(finalItems)
+		if err := tx.Model(&models.Project{}).Where("id = ?", projectId).Update("config_checksum", checksum).Error; err != nil {
+			return err
 		}
 
 		return nil

@@ -6,8 +6,8 @@ import {Plus} from 'lucide-vue-next';
 import SecretManagerForm from '@/components/project/SecretManagerForm.vue';
 import SecretManagerRow from '@/components/project/SecretManagerRow.vue';
 import {Project} from "@/services/project.service.ts";
-import {EncryptionService} from "@/services/encryption.service.ts";
 import { useSecretManagerStore } from '@/stores/secret-manager.store';
+import { useConfigEncryption } from '@/composables/useConfigEncryption';
 
 const props = defineProps<{
     project: Project;
@@ -23,6 +23,7 @@ const connectionStatuses = ref<Record<string, 'pending' | 'success' | 'error' | 
 const isAdding = ref(false);
 const editingId = ref<string | null>(null);
 const secretManagerStore = useSecretManagerStore();
+const { decryptSecretManagerConfig } = useConfigEncryption();
 
 watch(() => props.decryptedKey, (newKey) => {
     if (newKey && configs.value.length > 0) {
@@ -47,7 +48,7 @@ async function checkAllConnections() {
       connectionStatuses.value[config.id] = 'pending';
 
       try {
-        const decryptedJson = await EncryptionService.decryptValue(props.decryptedKey, config.encryptedKey)
+        const decryptedJson = await decryptSecretManagerConfig(props.decryptedKey, config.encryptedKey);
 
         const success = await secretManagerStore.testConnection(config.id, decryptedJson);
         connectionStatuses.value[config.id] = success ? 'success' : 'error';

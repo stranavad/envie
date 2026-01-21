@@ -13,7 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Plus, Users, Folder } from 'lucide-vue-next';
+import { Plus, Users, Folder, Loader2 } from 'lucide-vue-next';
 import { useRouter } from 'vue-router';
 
 const store = useOrganizationStore();
@@ -22,9 +22,14 @@ const router = useRouter();
 const showCreateDialog = ref(false);
 const newOrgName = ref('');
 const isCreating = ref(false);
+const isLoading = ref(true);
 
-onMounted(() => {
-    store.fetchOrganizations();
+onMounted(async () => {
+    try {
+        await store.fetchOrganizations();
+    } finally {
+        isLoading.value = false;
+    }
 });
 
 async function handleCreate() {
@@ -83,9 +88,14 @@ function openOrg(id: string) {
             </Dialog>
         </div>
 
-        <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            <div 
-                v-for="org in store.organizations" 
+        <!-- Loading State -->
+        <div v-if="isLoading" class="flex items-center justify-center py-20">
+            <Loader2 class="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+
+        <div v-else class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div
+                v-for="org in store.organizations"
                 :key="org.id"
                 class="rounded-xl border bg-card text-card-foreground shadow cursor-pointer hover:border-primary/50 transition-colors p-6 space-y-4"
                 @click="openOrg(org.id)"
@@ -96,7 +106,7 @@ function openOrg(id: string) {
                         {{ org.role }}
                     </span>
                 </div>
-                
+
                 <div class="grid grid-cols-2 gap-4 pt-2">
                     <div class="flex items-center gap-2 text-sm text-muted-foreground">
                         <Folder class="h-4 w-4" />
@@ -108,7 +118,7 @@ function openOrg(id: string) {
                     </div>
                 </div>
             </div>
-            
+
             <div v-if="store.organizations.length === 0" class="col-span-full text-center py-10 text-muted-foreground">
                 No organizations found. Create one to get started.
             </div>

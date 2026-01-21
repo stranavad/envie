@@ -4,22 +4,23 @@ import { useRoute, useRouter } from 'vue-router';
 import { type ProjectDetail, ProjectService } from '@/services/project.service';
 import { Button } from '@/components/ui/button';
 import { TabNav } from '@/components/ui/tab-nav';
-import { ArrowLeft, Loader2 } from 'lucide-vue-next';
+import { ArrowLeft, Loader2, Upload, Download, AlertTriangle } from 'lucide-vue-next';
 import ProjectConfig from '@/components/project/ProjectConfig.vue';
 import ProjectSettings from '@/components/project/ProjectSettings.vue';
 import ProjectProviders from '@/components/project/ProjectProviders.vue';
 import ProjectAccess from '@/components/project/ProjectAccess.vue';
 import ProjectFiles from '@/components/project/ProjectFiles.vue';
-import { EncryptionService } from '@/services/encryption.service';
-import { TeamService } from '@/services/team.service';
-import { IdentityService } from '@/services/identity.service';
-import { useOrganizationStore } from '@/stores/organization';
+import { FileMappingService, type SyncStatus } from '@/services/file-mapping.service';
+import { useProjectDecryption } from '@/composables/useProjectDecryption';
+import { useConfigEncryption } from '@/composables/useConfigEncryption';
 
 const route = useRoute();
 const router = useRouter();
 const projectId = route.params.id as string;
 
-const orgStore = useOrganizationStore();
+// Composables
+const { isDecrypting, decryptionError, decryptProjectKeys } = useProjectDecryption();
+const { fetchAndDecryptConfig } = useConfigEncryption();
 
 const project = ref<ProjectDetail | null>(null);
 const isLoading = ref(false);
@@ -37,8 +38,15 @@ const tabs = [
 // Decryption state
 const decryptedKey = ref('');
 const decryptedTeamKey = ref('');
-const isDecrypting = ref(false);
-const decryptionError = ref('');
+
+// Local file sync mode state
+const localImportItems = ref<{ name: string; value: string }[] | null>(null);
+const syncMode = ref(false);
+
+// Sync status state
+const syncStatus = ref<SyncStatus>('not_linked');
+const isPulling = ref(false);
+const syncError = ref('');
 
 async function loadProject() {
     isLoading.value = true;
@@ -56,79 +64,112 @@ async function loadProject() {
         return;
     }
 
-    await decryptProjectKey();
+    await decryptProjectKeyData();
+    await loadSyncStatus();
 }
 
-async function decryptProjectKey() {
+async function loadSyncStatus() {
     if (!project.value) return;
 
-    isDecrypting.value = true;
-    decryptionError.value = '';
+    try {
+        const result = await FileMappingService.checkSyncStatus(
+            projectId,
+            project.value.configChecksum || ''
+        );
+        syncStatus.value = result.status;
+    } catch (e) {
+        console.error('Failed to load sync status', e);
+    }
+}
+
+async function decryptProjectKeyData() {
+    if (!project.value) return;
 
     try {
-        // Use Master Identity private key for decryption (not device vault key)
-        const masterKeyPair = IdentityService.getMasterKeyPair();
-        if (!masterKeyPair) {
-            throw new Error('Master Identity not loaded. Please unlock your vault first.');
-        }
+        const { teamKey, projectKey } = await decryptProjectKeys({
+            teamId: project.value.teamId,
+            organizationId: project.value.organizationId,
+            encryptedTeamKey: project.value.encryptedTeamKey,
+            encryptedProjectKey: project.value.encryptedProjectKey,
+        });
 
-        let teamKey = '';
-
-        // Strategy 1: User is a team member - use encryptedTeamKey
-        if (project.value.encryptedTeamKey) {
-            console.log('Decrypting team key via user\'s encrypted team key');
-            teamKey = await EncryptionService.decryptKey(
-                masterKeyPair.privateKey,
-                project.value.encryptedTeamKey
-            );
-        }
-
-        // Strategy 2: User is org owner/admin without team membership
-        // Need to fetch team info and decrypt via org key
-        if (!teamKey && project.value.teamId && project.value.organizationId) {
-            console.log('Attempting decryption via organization key (org owner/admin path)');
-
-            // Get org key
-            const orgKey = await orgStore.unlockOrganization(project.value.organizationId);
-            if (!orgKey) {
-                throw new Error('Unable to access organization key. You may not have sufficient permissions.');
-            }
-
-            // Fetch team to get team.encryptedKey (encrypted with org key)
-            const teams = await TeamService.getTeams(project.value.organizationId);
-            const team = teams.find((t) => t.id === project.value?.teamId);
-
-            if (!team || !team.encryptedKey) {
-                throw new Error('Team key not found. Unable to decrypt project.');
-            }
-
-            // Decrypt team key using org key (symmetric AES)
-            teamKey = await EncryptionService.decryptValue(orgKey, team.encryptedKey);
-        }
-
-        if (!teamKey) {
-            throw new Error('Unable to obtain team key for decryption.');
-        }
-
-        // Store team key for later use (e.g., deriving keys for old versions)
         decryptedTeamKey.value = teamKey;
-
-        // Now decrypt the project key using the team key
-        console.log('Decrypting project key with team key');
-        decryptedKey.value = await EncryptionService.decryptValue(
-            teamKey,
-            project.value.encryptedProjectKey
-        );
-    } catch (e: any) {
-        console.error('Decryption failed', e);
-        decryptionError.value = 'Failed to unlock project: ' + (e.message || 'Unknown error');
-    } finally {
-        isDecrypting.value = false;
+        decryptedKey.value = projectKey;
+    } catch (e) {
+        // Error is already logged and set in decryptionError by the composable
     }
 }
 
 function onProjectUpdated(updatedProject: ProjectDetail) {
     project.value = updatedProject;
+}
+
+function handleReviewLocalChanges(items: { name: string; value: string }[]) {
+    localImportItems.value = items;
+    syncMode.value = true;
+    activeTab.value = 'config';
+}
+
+function handleSyncComplete() {
+    localImportItems.value = null;
+    syncMode.value = false;
+    // Reload project to get updated checksum
+    loadProject();
+}
+
+async function handlePull() {
+    if (!project.value || !decryptedKey.value) return;
+
+    isPulling.value = true;
+    syncError.value = '';
+
+    try {
+        const mapping = await FileMappingService.getMapping(projectId);
+        if (!mapping) {
+            throw new Error('No file mapping found');
+        }
+
+        // Fetch and decrypt config items using composable
+        const decryptedItems = await fetchAndDecryptConfig(projectId, decryptedKey.value);
+
+        // Write to local file
+        const localChecksum = await FileMappingService.writeToLocalFile(
+            mapping.filePath,
+            decryptedItems
+        );
+
+        // Update sync state
+        await FileMappingService.updateSyncState(
+            projectId,
+            localChecksum,
+            project.value.configChecksum || ''
+        );
+
+        syncStatus.value = 'synced';
+    } catch (e: any) {
+        console.error('Pull failed', e);
+        syncError.value = 'Pull failed: ' + (e.message || e.toString());
+    } finally {
+        isPulling.value = false;
+    }
+}
+
+async function handlePushReview() {
+    if (!project.value) return;
+
+    try {
+        const mapping = await FileMappingService.getMapping(projectId);
+        if (!mapping) {
+            throw new Error('No file mapping found');
+        }
+
+        // Read local file and trigger review mode
+        const localItems = await FileMappingService.readLocalFile(mapping.filePath);
+        handleReviewLocalChanges(localItems);
+    } catch (e: any) {
+        console.error('Failed to load local changes', e);
+        syncError.value = 'Failed to load local changes: ' + (e.message || e.toString());
+    }
 }
 
 loadProject();
@@ -178,12 +219,70 @@ loadProject();
                 Decrypting project...
             </div>
 
+            <!-- Sync Status Banner -->
+            <div
+                v-if="syncStatus === 'local_changed' && !syncMode"
+                class="flex items-center justify-between p-4 rounded-lg border bg-orange-500/10 border-orange-500/40"
+            >
+                <div class="flex items-center gap-3">
+                    <Upload class="w-5 h-5 text-orange-400" />
+                    <div>
+                        <p class="font-medium text-orange-200">Local .env file has changed</p>
+                        <p class="text-sm text-orange-300/70">Review and push your local changes to sync with Envie.</p>
+                    </div>
+                </div>
+                <Button size="sm" variant="outline" @click="handlePushReview">
+                    Review Changes
+                </Button>
+            </div>
+
+            <div
+                v-if="syncStatus === 'remote_changed'"
+                class="flex items-center justify-between p-4 rounded-lg border bg-blue-500/10 border-blue-500/40"
+            >
+                <div class="flex items-center gap-3">
+                    <Download class="w-5 h-5 text-blue-400" />
+                    <div>
+                        <p class="font-medium text-blue-200">Remote config has changed</p>
+                        <p class="text-sm text-blue-300/70">Pull the latest changes to update your local .env file.</p>
+                    </div>
+                </div>
+                <Button size="sm" variant="outline" :disabled="isPulling" @click="handlePull">
+                    <Loader2 v-if="isPulling" class="w-4 h-4 mr-2 animate-spin" />
+                    <Download v-else class="w-4 h-4 mr-2" />
+                    Pull Changes
+                </Button>
+            </div>
+
+            <div
+                v-if="syncStatus === 'both_changed'"
+                class="flex items-center justify-between p-4 rounded-lg border bg-red-500/10 border-red-500/40"
+            >
+                <div class="flex items-center gap-3">
+                    <AlertTriangle class="w-5 h-5 text-red-400" />
+                    <div>
+                        <p class="font-medium text-red-200">Sync conflict detected</p>
+                        <p class="text-sm text-red-300/70">Both local and remote have changed. Go to Settings to resolve.</p>
+                    </div>
+                </div>
+                <Button size="sm" variant="outline" @click="activeTab = 'settings'">
+                    Go to Settings
+                </Button>
+            </div>
+
+            <div v-if="syncError" class="bg-destructive/15 text-destructive p-4 rounded-md">
+                {{ syncError }}
+            </div>
+
             <TabNav v-model="activeTab" :tabs="tabs" />
 
             <div v-show="activeTab === 'config'" class="space-y-6 min-w-0">
                 <ProjectConfig
                     :project="project"
                     :decrypted-key="decryptedKey"
+                    :local-import-items="localImportItems"
+                    :sync-mode="syncMode"
+                    @sync-complete="handleSyncComplete"
                 />
             </div>
 
@@ -202,6 +301,7 @@ loadProject();
                     :team-key="decryptedTeamKey"
                     @project-updated="onProjectUpdated"
                     @rotated="loadProject"
+                    @review-local-changes="handleReviewLocalChanges"
                 />
             </div>
 

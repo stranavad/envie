@@ -3,14 +3,21 @@ import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { type Project, ProjectService } from '@/services/project.service';
 import { KeyRotationService, type PendingRotationWithProject } from '@/services/key-rotation.service';
+import { FileMappingService, type SyncStatus } from '@/services/file-mapping.service';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Building2, ArrowRight, KeyRound, AlertTriangle, Loader2 } from 'lucide-vue-next';
 import ProjectListItem from '@/components/project/ProjectListItem.vue';
+import { useProjectDecryption } from '@/composables/useProjectDecryption';
+import { useConfigEncryption } from '@/composables/useConfigEncryption';
 
 const router = useRouter();
+const { decryptProjectKeys } = useProjectDecryption();
+const { fetchAndDecryptConfig } = useConfigEncryption();
 const projects = ref<Project[]>([]);
 const pendingRotations = ref<PendingRotationWithProject[]>([]);
+const syncStatusMap = ref<Record<string, SyncStatus>>({});
+const pullingMap = ref<Record<string, boolean>>({});
 const isLoading = ref(false);
 const error = ref('');
 
@@ -43,10 +50,86 @@ async function loadProjects() {
         ]);
         projects.value = projectsData;
         pendingRotations.value = rotationsData;
+
+        // Load sync statuses for linked projects
+        await loadSyncStatuses(projectsData);
     } catch (err: any) {
         error.value = 'Failed to load projects: ' + err.toString();
     } finally {
         isLoading.value = false;
+    }
+}
+
+async function loadSyncStatuses(projectsList: Project[]) {
+    try {
+        const mappings = await FileMappingService.getAllMappings();
+        const statusMap: Record<string, SyncStatus> = {};
+
+        for (const mapping of mappings) {
+            const project = projectsList.find(p => p.id === mapping.projectId);
+            if (!project) continue;
+
+            const result = await FileMappingService.checkSyncStatus(
+                mapping.projectId,
+                project.configChecksum || ''
+            );
+
+            statusMap[mapping.projectId] = result.status;
+        }
+
+        syncStatusMap.value = statusMap;
+    } catch (e) {
+        console.error('Failed to load sync statuses', e);
+    }
+}
+
+async function handlePull(projectId: string) {
+    const project = projects.value.find(p => p.id === projectId);
+    if (!project) return;
+
+    pullingMap.value[projectId] = true;
+
+    try {
+        // Get file mapping
+        const mapping = await FileMappingService.getMapping(projectId);
+        if (!mapping) {
+            throw new Error('No file mapping found');
+        }
+
+        // Get project details to access encrypted keys
+        const projectDetail = await ProjectService.getProject(projectId);
+
+        // Decrypt project key using composable
+        const { projectKey } = await decryptProjectKeys({
+            teamId: projectDetail.teamId,
+            organizationId: projectDetail.organizationId,
+            encryptedTeamKey: projectDetail.encryptedTeamKey,
+            encryptedProjectKey: projectDetail.encryptedProjectKey,
+        });
+
+        // Fetch and decrypt config items using composable
+        const decryptedItems = await fetchAndDecryptConfig(projectId, projectKey);
+
+        // Write to local file
+        const localChecksum = await FileMappingService.writeToLocalFile(
+            mapping.filePath,
+            decryptedItems
+        );
+
+        // Update sync state
+        await FileMappingService.updateSyncState(
+            projectId,
+            localChecksum,
+            projectDetail.configChecksum || ''
+        );
+
+        // Update local status
+        syncStatusMap.value[projectId] = 'synced';
+    } catch (e: any) {
+        console.error('Pull failed', e);
+        error.value = `Pull failed for ${project.name}: ${e.message || e.toString()}`;
+    } finally {
+        pullingMap.value[projectId] = false;
     }
 }
 
@@ -167,7 +250,10 @@ loadProjects();
                             v-for="project in org.projects"
                             :key="project.id"
                             :project="project"
+                            :sync-status="syncStatusMap[project.id]"
+                            :is-pulling="pullingMap[project.id]"
                             @click="navigateToProject"
+                            @pull="handlePull"
                         />
                     </div>
                 </div>

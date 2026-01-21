@@ -18,12 +18,11 @@ import {
   Trash2
 } from 'lucide-vue-next';
 import {ref, watch} from 'vue';
-import {type SecretManagerConfig, SecretManagerConfigService} from '@/services/secret-manager-config.service';
 
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from '@/components/ui/select'
 import {Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,} from '@/components/ui/command'
 import {Popover, PopoverContent, PopoverTrigger,} from '@/components/ui/popover'
-import {EncryptionService} from "@/services/encryption.service.ts";
+import {useSecretManager} from '@/composables/useSecretManager';
 
 const props = defineProps<{
     modelValue: ConfigItem;
@@ -40,14 +39,13 @@ const emit = defineEmits<{
     (e: 'move-to-category', category: string | undefined): void;
 }>();
 
+// UI state
 const expanded = ref(false)
 const show = ref(!props.modelValue.sensitive)
 const showCopiedToast = ref(false)
 
-// Secret Manager State
-const isLoadingSecrets = ref(false);
-const secretConfigs = ref<SecretManagerConfig[]>([]);
-const availableSecrets = ref<{ name: string; providerId: string; providerName: string }[]>([]);
+// Secret Manager - use composable
+const secretManager = useSecretManager(props.modelValue.projectId, props.decryptedKey);
 const selectedProviderId = ref<string>('');
 const selectedSecretName = ref<string>(props.modelValue.secretManagerName || '');
 const isSecretLinked = ref(!!props.modelValue.secretManagerName);
@@ -59,78 +57,34 @@ watch(() => props.modelValue.secretManagerName, (val) => {
 });
 
 watch(expanded, async (val) => {
-    if (val && secretConfigs.value.length === 0) {
+    if (val && secretManager.configs.value.length === 0) {
         await loadSecretOptions();
     }
 });
 
-// ... imports
-import { useSecretManagerStore } from '@/stores/secret-manager.store';
-
-// ...
-
-const secretManagerStore = useSecretManagerStore();
-
 async function loadSecretOptions() {
-    isLoadingSecrets.value = true;
-    try {
-        const configs = await SecretManagerConfigService.getConfigs(props.modelValue.projectId);
-        secretConfigs.value = configs;
+    await secretManager.loadAvailableSecrets();
 
-        const secrets: { name: string; providerId: string; providerName: string }[] = [];
-
-        // Fetch secrets from all providers
-        for (const config of configs) {
-             try {
-               const decryptedJson = await EncryptionService.decryptValue(props.decryptedKey, config.encryptedKey)
-
-                const list = await secretManagerStore.listSecrets(config.id, decryptedJson);
-                list.forEach(name => {
-                    secrets.push({
-                        name,
-                        providerId: config.id,
-                        providerName: config.name
-                    });
-                });
-             } catch (e) {
-                 console.error("Failed to load secrets for provider", config.name, e);
-             }
+    // Auto-select provider if secret name matches or specific ID is set
+    if (props.modelValue.secretManagerConfigId) {
+        selectedProviderId.value = props.modelValue.secretManagerConfigId;
+    } else if (props.modelValue.secretManagerName) {
+        const providerId = secretManager.findProviderForSecret(props.modelValue.secretManagerName);
+        if (providerId) {
+            selectedProviderId.value = providerId;
+        } else if (secretManager.configs.value.length > 0) {
+            selectedProviderId.value = secretManager.configs.value[0].id;
         }
-        availableSecrets.value = secrets;
-
-        // Auto-select provider if secret name matches or specific ID is set
-        if (props.modelValue.secretManagerConfigId) {
-             selectedProviderId.value = props.modelValue.secretManagerConfigId;
-        } else if (props.modelValue.secretManagerName) {
-            const match = secrets.find(s => s.name === props.modelValue.secretManagerName);
-            if (match) {
-                selectedProviderId.value = match.providerId;
-            } else if (configs.length > 0) {
-                 selectedProviderId.value = configs[0].id; // Default
-            }
-        } else if (configs.length > 0) {
-            selectedProviderId.value = configs[0].id;
-        }
-
-    } catch (e) {
-        console.error("Failed to load secret configs", e);
-    } finally {
-        isLoadingSecrets.value = false;
+    } else if (secretManager.configs.value.length > 0) {
+        selectedProviderId.value = secretManager.configs.value[0].id;
     }
 }
 
-async function syncSecret() {
+async function handleSyncSecret() {
     if (!selectedProviderId.value || !selectedSecretName.value) return;
 
-    // Find provider
-    const config = secretConfigs.value.find(c => c.id === selectedProviderId.value);
-    if (!config) return;
-
-    isLoadingSecrets.value = true;
     try {
-        const decryptedJson = await EncryptionService.decryptValue(props.decryptedKey, config.encryptedKey)
-
-        const result = await secretManagerStore.getSecretValue(config.id, decryptedJson, selectedSecretName.value);
+        const result = await secretManager.syncSecret(selectedProviderId.value, selectedSecretName.value);
 
         const newItem = {
             ...props.modelValue,
@@ -138,14 +92,12 @@ async function syncSecret() {
             secretManagerName: selectedSecretName.value,
             secretManagerConfigId: selectedProviderId.value,
             secretManagerVersion: result.version,
-            secretManagerLastSyncAt: new Date().toISOString()
+            secretManagerLastSyncAt: result.lastSyncAt
         };
 
         emit('update:modelValue', newItem);
     } catch (e) {
         alert("Failed to sync secret: " + e);
-    } finally {
-        isLoadingSecrets.value = false;
     }
 }
 
@@ -167,7 +119,7 @@ function updateLink(val: boolean) {
          };
          emit('update:modelValue', newItem);
     } else {
-        if (availableSecrets.value.length === 0) loadSecretOptions();
+        if (secretManager.availableSecrets.value.length === 0) loadSecretOptions();
     }
 }
 
@@ -313,18 +265,18 @@ function copyToClipboard() {
 
                    <div v-if="isSecretLinked" class="animate-in fade-in zoom-in-95 duration-200 mt-2">
 
-                      <div v-if="secretConfigs.length === 0 && !isLoadingSecrets" class="text-sm text-yellow-600">No Secret Manager providers configured.</div>
+                      <div v-if="secretManager.configs.value.length === 0 && !secretManager.isLoading.value" class="text-sm text-yellow-600">No Secret Manager providers configured.</div>
 
                       <div v-else class="grid gap-3">
                            <!-- Provider Select (Only if multiple) -->
-                           <div v-if="secretConfigs.length > 1" class="grid gap-1">
+                           <div v-if="secretManager.configs.value.length > 1" class="grid gap-1">
                                 <Label class="text-xs">Provider</Label>
                                 <Select v-model="selectedProviderId">
                                   <SelectTrigger class="w-full h-9">
                                     <SelectValue placeholder="Select provider" />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem v-for="c in secretConfigs" :key="c.id" :value="c.id">
+                                    <SelectItem v-for="c in secretManager.configs.value" :key="c.id" :value="c.id">
                                       {{ c.name }}
                                     </SelectItem>
                                   </SelectContent>
@@ -333,8 +285,8 @@ function copyToClipboard() {
 
                              <div class="flex items-center justify-between">
                                 <Label class="text-xs">Secret Name</Label>
-                                <Button variant="ghost" size="sm" class="h-6 text-xs" @click="loadSecretOptions" :disabled="isLoadingSecrets">
-                                    <RefreshCw class="w-3 h-3 mr-1" :class="{'animate-spin': isLoadingSecrets}" />
+                                <Button variant="ghost" size="sm" class="h-6 text-xs" @click="loadSecretOptions" :disabled="secretManager.isLoading.value">
+                                    <RefreshCw class="w-3 h-3 mr-1" :class="{'animate-spin': secretManager.isLoading.value}" />
                                     Refresh List
                                 </Button>
                              </div>
@@ -349,7 +301,7 @@ function copyToClipboard() {
                                                 role="combobox"
                                                 :aria-expanded="openCombobox"
                                                 class="w-full justify-between h-9 font-normal bg-transparent"
-                                                :disabled="isLoadingSecrets"
+                                                :disabled="secretManager.isLoading.value"
                                             >
                                                 {{ selectedSecretName || "Select secret..." }}
                                                 <ChevronsUpDown class="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -362,7 +314,7 @@ function copyToClipboard() {
                                                 <CommandList>
                                                     <CommandGroup>
                                                         <CommandItem
-                                                            v-for="s in availableSecrets.filter(x => x.providerId === selectedProviderId)"
+                                                            v-for="s in secretManager.availableSecrets.value.filter(x => x.providerId === selectedProviderId)"
                                                             :key="s.name"
                                                             :value="s.name"
                                                             @select="() => {
@@ -382,15 +334,15 @@ function copyToClipboard() {
                                         </PopoverContent>
                                     </Popover>
 
-                                     <Button size="sm" @click="syncSecret" :disabled="isLoadingSecrets || !selectedSecretName">
-                                        <RefreshCw class="w-3 h-3 mr-2" :class="{'animate-spin': isLoadingSecrets}" />
+                                     <Button size="sm" @click="handleSyncSecret" :disabled="secretManager.isLoading.value || !selectedSecretName">
+                                        <RefreshCw class="w-3 h-3 mr-2" :class="{'animate-spin': secretManager.isLoading.value}" />
                                         Sync
                                      </Button>
                                 </div>
                                 <p v-if="modelValue.secretManagerLastSyncAt" class="text-[10px] text-muted-foreground pt-1">
                                     Last synced: {{ new Date(modelValue.secretManagerLastSyncAt).toLocaleString() }} (v{{ modelValue.secretManagerVersion }})
                                 </p>
-                                <p v-if="availableSecrets.length === 0 && !isLoadingSecrets" class="text-[10px] text-muted-foreground pt-1">
+                                <p v-if="secretManager.availableSecrets.value.length === 0 && !secretManager.isLoading.value" class="text-[10px] text-muted-foreground pt-1">
                                     No secrets found. Check provider connection manually or refresh.
                                 </p>
                            </div>

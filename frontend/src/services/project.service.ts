@@ -10,6 +10,7 @@ export interface Project {
     encryptedProjectKey: string;
     encryptedTeamKey?: string;
     keyVersion: number;
+    configChecksum?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -30,6 +31,7 @@ export interface ProjectDetail {
     canEdit: boolean;
     canDelete: boolean;
     keyVersion: number;
+    configChecksum?: string;
 }
 
 export interface CreateProjectRequest {

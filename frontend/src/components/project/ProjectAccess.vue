@@ -8,15 +8,14 @@ import { Users, Plus, Shield, ChevronDown, ChevronRight, Loader2 } from 'lucide-
 import { ProjectService, type ProjectDetail, type ProjectAccessData } from '@/services/project.service';
 import { TeamService } from '@/services/team.service';
 import { EncryptionService } from '@/services/encryption.service';
-import { IdentityService } from '@/services/identity.service';
-import { useOrganizationStore } from '@/stores/organization';
+import { useProjectDecryption } from '@/composables/useProjectDecryption';
 
 const props = defineProps<{
     project: ProjectDetail;
     decryptedKey: string;
 }>();
 
-const orgStore = useOrganizationStore();
+const { decryptTeamKeyFromTeam } = useProjectDecryption();
 
 const accessData = ref<ProjectAccessData | null>(null);
 const isLoading = ref(false);
@@ -62,29 +61,8 @@ async function handleAddTeam() {
             throw new Error('Team not found');
         }
 
-        let teamKey = '';
-
-        const masterKeyPair = IdentityService.getMasterKeyPair();
-        if (!masterKeyPair) {
-            throw new Error('Master Identity not loaded');
-        }
-
-        // Try to decrypt team key via user's encrypted team key
-        if (team.userEncryptedKey) {
-            teamKey = await EncryptionService.decryptKey(masterKeyPair.privateKey, team.userEncryptedKey);
-        }
-
-        // Fallback: Use org key
-        if (!teamKey) {
-            const orgKey = await orgStore.unlockOrganization(props.project.organizationId);
-            if (orgKey && team.encryptedKey) {
-                teamKey = await EncryptionService.decryptValue(orgKey, team.encryptedKey);
-            }
-        }
-
-        if (!teamKey) {
-            throw new Error('Unable to decrypt team key');
-        }
+        // Decrypt team key using composable (handles both user key and org key paths)
+        const teamKey = await decryptTeamKeyFromTeam(team, props.project.organizationId);
 
         // Encrypt project key with team key
         const encryptedProjectKey = await EncryptionService.encryptValue(teamKey, props.decryptedKey);

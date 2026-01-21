@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useOrganizationStore } from '@/stores/organization';
 import { Button } from '@/components/ui/button';
 import { TabNav } from '@/components/ui/tab-nav';
-import { Users, ArrowLeft } from 'lucide-vue-next';
+import { Users, ArrowLeft, Loader2 } from 'lucide-vue-next';
 import OrganizationProjects from '@/components/organization/OrganizationProjects.vue';
 import OrganizationTeams from '@/components/organization/OrganizationTeams.vue';
 import OrganizationUsers from '@/components/organization/OrganizationUsers.vue';
@@ -27,6 +27,7 @@ const tabs = [
 ];
 
 // Data
+const isLoading = ref(true);
 const teams = ref<any[]>([]);
 const users = ref<any[]>([]);
 const isAddMemberOpen = ref(false);
@@ -41,11 +42,15 @@ const canEditOrg = computed(() => {
 });
 
 onMounted(async () => {
-    await store.getOrganization(orgId);
-    await Promise.all([
-        loadTeams(),
-        loadUsers()
-    ]);
+    try {
+        await store.getOrganization(orgId);
+        await Promise.all([
+            loadTeams(),
+            loadUsers()
+        ]);
+    } finally {
+        isLoading.value = false;
+    }
 });
 
 async function loadTeams() {
@@ -91,7 +96,12 @@ async function handleMemberAdded() {
             </Button>
         </div>
 
-        <div v-if="organization" class="space-y-6">
+        <!-- Loading State -->
+        <div v-if="isLoading" class="flex items-center justify-center py-20">
+            <Loader2 class="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+
+        <div v-else-if="organization" class="space-y-6">
             <!-- Header -->
             <div class="flex items-center justify-between">
                 <div class="flex flex-col gap-1">
@@ -147,8 +157,8 @@ async function handleMemberAdded() {
             </div>
         </div>
 
-        <div v-else class="h-full flex items-center justify-center">
-            <div class="loading loading-spinner loading-lg"></div>
+        <div v-else class="text-center py-20 text-muted-foreground">
+            Organization not found.
         </div>
 
         <AddOrganizationMemberDialog

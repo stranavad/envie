@@ -37,6 +37,7 @@ walkdir = "2"
 
 tauri-plugin-stronghold = "2"
 tauri-plugin-dialog = "2.6"
+tauri-plugin-store = "2"
 
 [target."cfg(target_os = \"macos\")".dependencies]
 objc2 = "0.5"

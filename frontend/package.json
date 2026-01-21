@@ -27,6 +27,7 @@
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-http": "^2.5.4",
     "@tauri-apps/plugin-opener": "^2.5.2",
+    "@tauri-apps/plugin-store": "^2.4.2",
     "@tauri-apps/plugin-stronghold": "^2.3.1",
     "@vueuse/core": "^14.1.0",
     "class-variance-authority": "^0.7.1",

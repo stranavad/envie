@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { type ConfigItem, type ProjectDetail, ProjectService } from '@/services/project.service';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -16,7 +16,8 @@ import {
     GripVertical,
     Pencil,
     Trash2,
-    FolderOpen
+    FolderOpen,
+    Loader2
 } from 'lucide-vue-next';
 import ConfigItemRow from './ConfigItemRow.vue';
 import SecretImportDialog from './SecretImportDialog.vue';
@@ -24,19 +25,56 @@ import AddItemDialog from './dialogs/AddItemDialog.vue';
 import AddCategoryDialog from './dialogs/AddCategoryDialog.vue';
 import RenameCategoryDialog from './dialogs/RenameCategoryDialog.vue';
 import EnvImportDialog from './dialogs/EnvImportDialog.vue';
-import { EncryptionService } from '@/services/encryption.service';
 import { SecretManagerConfigService } from '@/services/secret-manager-config.service';
+import { FileMappingService } from '@/services/file-mapping.service';
 import { useCategoryManagement } from '@/composables/useCategoryManagement';
+import { useConfigEncryption } from '@/composables/useConfigEncryption';
 import { copyEnvToClipboard, parseEnvString, type ParsedEnvItem } from '@/utils/env-format';
 import { IconButton } from '@/components/ui/icon-button';
 import { SortableContainer } from '@/components/ui/sortable';
+import { RefreshCw } from 'lucide-vue-next';
 
 const props = defineProps<{
     project: ProjectDetail;
     decryptedKey: string;
+    localImportItems?: { name: string; value: string }[] | null;
+    syncMode?: boolean;
 }>();
 
+const emit = defineEmits<{
+    (e: 'syncComplete'): void;
+}>();
+
+const { fetchAndDecryptConfig, encryptAndSyncConfig } = useConfigEncryption();
+
+// Watch for local import items from Push operation (review mode)
+watch(() => props.localImportItems, (items) => {
+    if (items && items.length > 0) {
+        handleLocalImport(items);
+    }
+}, { immediate: true });
+
+function handleLocalImport(items: { name: string; value: string }[]) {
+    items.forEach(newItem => {
+        const existingIndex = configItems.value.findIndex(ci => ci.name === newItem.name);
+
+        if (existingIndex !== -1) {
+            configItems.value[existingIndex].value = newItem.value;
+        } else {
+            configItems.value.push({
+                id: crypto.randomUUID(),
+                projectId: props.project.id,
+                name: newItem.name,
+                value: newItem.value,
+                sensitive: true,
+                position: configItems.value.length,
+            });
+        }
+    });
+}
+
 // Core state
+const isLoading = ref(true);
 const originalConfigItems = ref<ConfigItem[]>([]);
 const configItems = ref<ConfigItem[]>([]);
 const isSaving = ref(false);
@@ -110,21 +148,8 @@ const hasChanges = computed(() => {
 
 async function loadConfig() {
     try {
-        const configs = await ProjectService.getConfig(props.project.id);
-        const decryptedConfigs: ConfigItem[] = [];
-
-        for (const item of configs) {
-            try {
-                item.value = await EncryptionService.decryptValue(props.decryptedKey, item.value);
-                decryptedConfigs.push(item);
-            } catch (e) {
-                console.error(`Failed to decrypt item ${item.name}`, e);
-                item.value = '[DECRYPTION FAILED]';
-                decryptedConfigs.push(item);
-            }
-        }
-
-        decryptedConfigs.sort((a, b) => a.position - b.position);
+        // Fetch and decrypt config items using composable
+        const decryptedConfigs = await fetchAndDecryptConfig(props.project.id, props.decryptedKey);
         configItems.value = decryptedConfigs;
         originalConfigItems.value = structuredClone(decryptedConfigs);
     } catch (e) {
@@ -149,15 +174,50 @@ async function handleSave() {
     try {
         recalculatePositions();
 
-        const itemsToSave: ConfigItem[] = await Promise.all(configItems.value.map(async (item) => ({
-            ...item,
-            value: await EncryptionService.encryptValue(props.decryptedKey, item.value),
-        })));
-
-        await ProjectService.syncConfig(props.project.id, itemsToSave);
+        // Encrypt and sync using composable
+        await encryptAndSyncConfig(props.project.id, props.decryptedKey, configItems.value);
         await loadConfig();
     } catch (e: unknown) {
         saveError.value = 'Failed to save: ' + String(e);
+    } finally {
+        isSaving.value = false;
+    }
+}
+
+async function handleSaveAndSync() {
+    isSaving.value = true;
+    saveError.value = '';
+
+    try {
+        recalculatePositions();
+
+        // Encrypt and save to remote using composable
+        await encryptAndSyncConfig(props.project.id, props.decryptedKey, configItems.value);
+
+        // Get the file mapping to write back to local file
+        const mapping = await FileMappingService.getMapping(props.project.id);
+        if (mapping) {
+            // Write current config to local file
+            const localChecksum = await FileMappingService.writeToLocalFile(
+                mapping.filePath,
+                configItems.value
+            );
+
+            // Get updated project checksum
+            const updatedProject = await ProjectService.getProject(props.project.id);
+
+            // Update mapping with new checksums
+            await FileMappingService.updateSyncState(
+                props.project.id,
+                localChecksum,
+                updatedProject.configChecksum || ''
+            );
+        }
+
+        await loadConfig();
+        emit('syncComplete');
+    } catch (e: unknown) {
+        saveError.value = 'Failed to save and sync: ' + String(e);
     } finally {
         isSaving.value = false;
     }
@@ -269,15 +329,38 @@ function onDragEnd() {
     recalculatePositions();
 }
 
+// Handler for reordering when there are no categories
+function onNoCategoryReorder(newItems: ConfigItem[]) {
+    // Update positions directly based on new array order
+    newItems.forEach((item, index) => {
+        item.position = index;
+    });
+    configItems.value = newItems;
+}
+
 // Initialize
-loadConfig();
-loadSecretManagerConfigs();
+async function initialize() {
+    try {
+        await Promise.all([
+            loadConfig(),
+            loadSecretManagerConfigs()
+        ]);
+    } finally {
+        isLoading.value = false;
+    }
+}
+initialize();
 </script>
 
 <template>
     <div class="space-y-4 min-w-0">
+        <!-- Loading State -->
+        <div v-if="isLoading" class="flex items-center justify-center py-20">
+            <Loader2 class="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+
         <!-- Empty State -->
-        <div v-if="configItems.length === 0" class="border border-dashed rounded-lg p-8">
+        <div v-else-if="configItems.length === 0" class="border border-dashed rounded-lg p-8">
             <div class="max-w-lg mx-auto space-y-4">
                 <div class="text-center space-y-2">
                     <h3 class="text-lg font-medium">No config items yet</h3>
@@ -319,6 +402,13 @@ loadSecretManagerConfigs();
 
         <!-- With Items: Toolbar + List -->
         <div v-else class="space-y-4 min-w-0 overflow-hidden">
+            <!-- Sync Mode Banner -->
+            <div v-if="syncMode" class="p-3 bg-orange-500/10 border border-orange-500/40 rounded-lg">
+                <p class="text-sm text-orange-200">
+                    <strong>Reviewing local changes.</strong> Make any adjustments, then click "Save & Sync" to save to Envie and update your local .env file.
+                </p>
+            </div>
+
             <!-- Toolbar -->
             <div class="flex items-center justify-between gap-4">
                 <div class="flex items-center gap-2 shrink-0">
@@ -347,7 +437,23 @@ loadSecretManagerConfigs();
                         <Check v-if="isCopying" class="w-4 h-4 text-green-500" />
                         <Copy v-else class="w-4 h-4" />
                     </IconButton>
-                    <Button size="sm" class="ml-2" @click="handleSave" :disabled="isSaving || !decryptedKey || !hasChanges">
+                    <Button
+                        v-if="syncMode"
+                        size="sm"
+                        class="ml-2"
+                        @click="handleSaveAndSync"
+                        :disabled="isSaving || !decryptedKey || !hasChanges"
+                    >
+                        <RefreshCw class="w-4 h-4 mr-2" />
+                        {{ isSaving ? 'Syncing...' : 'Save & Sync' }}
+                    </Button>
+                    <Button
+                        v-else
+                        size="sm"
+                        class="ml-2"
+                        @click="handleSave"
+                        :disabled="isSaving || !decryptedKey || !hasChanges"
+                    >
                         <Save class="w-4 h-4 mr-2" />
                         {{ isSaving ? 'Saving...' : 'Save' }}
                     </Button>
@@ -476,7 +582,7 @@ loadSecretManagerConfigs();
             <SortableContainer
                 v-if="!hasCategories"
                 :model-value="configItems"
-                @update:model-value="configItems = $event"
+                @update:model-value="onNoCategoryReorder"
                 item-key="id"
                 handle=".drag-handle"
                 ghost-class="dragging-ghost"
@@ -484,7 +590,7 @@ loadSecretManagerConfigs();
                 drag-class="dragging-drag"
                 class="flex flex-col gap-2"
                 @start="isDragging = true"
-                @end="onDragEnd"
+                @end="isDragging = false"
             >
                 <template #item="{ element: item }">
                     <ConfigItemRow

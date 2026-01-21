@@ -1,6 +1,21 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use tauri::{Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
+use std::path::Path;
 
+#[tauri::command]
+fn read_text_file_absolute(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
+#[tauri::command]
+fn write_text_file_absolute(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+#[tauri::command]
+fn file_exists_absolute(path: String) -> Result<bool, String> {
+    Ok(Path::new(&path).exists())
+}
 
 #[tauri::command]
 fn nuke_vault(app: tauri::AppHandle, user_id: String) -> Result<(), String> {
@@ -97,9 +112,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             nuke_vault,
-            check_vault_exists
+            check_vault_exists,
+            read_text_file_absolute,
+            write_text_file_absolute,
+            file_exists_absolute
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -12,11 +12,11 @@ export interface Team {
 export interface TeamListItem extends Team {
     memberCount: number;
     projectCount: number;
-    previewUsers: TeamPreviewUser[];
+    users: TeamUser[];
     userEncryptedKey: string;
 }
 
-export interface TeamPreviewUser {
+export interface TeamUser {
     id: string;
     name: string;
     email: string;

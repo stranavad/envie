@@ -19,8 +19,8 @@ import {Loader2, Search} from 'lucide-vue-next';
 import {type SecretManagerConfig, SecretManagerConfigService} from '@/services/secret-manager-config.service';
 
 import type {ConfigItem} from '@/services/project.service';
-import {EncryptionService} from "@/services/encryption.service.ts";
 import { useSecretManagerStore } from '@/stores/secret-manager.store';
+import { useConfigEncryption } from '@/composables/useConfigEncryption';
 
 const props = defineProps<{
     open: boolean;
@@ -48,6 +48,7 @@ const processedCount = ref(0);
 const totalCount = ref(0);
 
 const secretManagerStore = useSecretManagerStore();
+const { decryptSecretManagerConfig } = useConfigEncryption();
 
 watch(() => props.open, (val) => {
     isOpen.value = val;
@@ -91,7 +92,7 @@ async function loadSecrets(providerId: string) {
         const config = providers.value.find(p => p.id === providerId);
         if (!config) return;
 
-        const decryptedJson = await EncryptionService.decryptValue(props.decryptedKey, config.encryptedKey)
+        const decryptedJson = await decryptSecretManagerConfig(props.decryptedKey, config.encryptedKey);
 
         secrets.value = await secretManagerStore.listSecrets(providerId, decryptedJson);
     } catch (e) {
@@ -141,7 +142,7 @@ async function handleImport() {
         const config = providers.value.find(p => p.id === selectedProviderId.value);
         if (!config) return;
 
-        const decryptedJson = await EncryptionService.decryptValue(props.decryptedKey, config.encryptedKey)
+        const decryptedJson = await decryptSecretManagerConfig(props.decryptedKey, config.encryptedKey);
 
         const items: Partial<ConfigItem>[] = [];
         totalCount.value = selectedSecrets.value.size;

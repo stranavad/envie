@@ -8,7 +8,7 @@ import {onMounted, ref} from 'vue';
 import {SecretManagerService, serviceAccountKeySchema} from '@/services/secret-manager.service';
 import {type SecretManagerConfig, SecretManagerConfigService} from '@/services/secret-manager-config.service';
 import {AlertCircle, CheckCircle2, Plug, Save} from 'lucide-vue-next';
-import {EncryptionService} from "@/services/encryption.service.ts";
+import { useConfigEncryption } from '@/composables/useConfigEncryption';
 
 const props = defineProps<{
     project: any;
@@ -20,6 +20,8 @@ const emit = defineEmits<{
     (e: 'saved'): void;
     (e: 'cancel'): void;
 }>();
+
+const { decryptSecretManagerConfig, encryptConfigValue } = useConfigEncryption();
 
 const formName = ref('');
 const formKey = ref('');
@@ -41,7 +43,7 @@ onMounted(async () => {
       formError.value = "Project key not available";
       return;
     }
-    formKey.value = await EncryptionService.decryptValue(props.decryptedKey, props.initialConfig.encryptedKey)
+    formKey.value = await decryptSecretManagerConfig(props.decryptedKey, props.initialConfig.encryptedKey)
   } catch (e) {
       console.error(e);
       formError.value = "Failed to decrypt key: " + e;
@@ -104,7 +106,7 @@ async function handleSave() {
     isSaving.value = true;
     try {
         // Encrypt Key
-        const encryptedKey = await EncryptionService.encryptValue(props.decryptedKey, formKey.value);
+        const encryptedKey = await encryptConfigValue(props.decryptedKey!, formKey.value);
 
 
         if (props.initialConfig) {

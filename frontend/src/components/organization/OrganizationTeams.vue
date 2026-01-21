@@ -30,7 +30,7 @@ export interface Team {
     encryptedKey: string;
     projectCount: number;
     memberCount: number;
-    previewUsers?: { id: string; name: string; avatarUrl?: string }[];
+    users?: { id: string; name: string; avatarUrl?: string }[];
 }
 
 const props = defineProps<{
@@ -192,7 +192,7 @@ async function handleUpdateMemberRole(teamId: string, userId: string, newRole: s
                     <div class="flex items-center gap-3">
                         <div class="flex -space-x-2">
                             <Avatar
-                                v-for="u in team.previewUsers?.slice(0, 3)"
+                                v-for="u in team.users?.slice(0, 3)"
                                 :key="u.id"
                                 class="h-8 w-8 border-2 border-background"
                             >
@@ -200,10 +200,10 @@ async function handleUpdateMemberRole(teamId: string, userId: string, newRole: s
                                 <AvatarFallback>{{ u.name?.[0] }}</AvatarFallback>
                             </Avatar>
                             <div
-                                v-if="team.memberCount > 3"
+                                v-if="(team.users?.length ?? 0) > 3"
                                 class="h-8 w-8 rounded-full border-2 border-background bg-muted flex items-center justify-center text-xs font-medium"
                             >
-                                +{{ team.memberCount - 3 }}
+                                +{{ (team.users?.length ?? 0) - 3 }}
                             </div>
                         </div>
                         <Button

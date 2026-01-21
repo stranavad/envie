@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import {ref, watch} from 'vue';
+import {ref, watch, onMounted} from 'vue';
 import {useRouter} from 'vue-router';
-import {type ProjectDetail, ProjectService} from '@/services/project.service';
+import {type ProjectDetail, type ConfigItem, ProjectService} from '@/services/project.service';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Card, CardContent, CardDescription, CardHeader, CardTitle,} from '@/components/ui/card';
 import KeyRotation from './KeyRotation.vue';
+import PushPreviewDialog from './dialogs/PushPreviewDialog.vue';
+import {FileMappingService, type FileMapping, type SyncStatus} from '@/services/file-mapping.service';
+import {open} from '@tauri-apps/plugin-dialog';
+import {FileText, Link2, Unlink, Download, Upload, AlertCircle, CheckCircle2, RefreshCw, Loader2} from 'lucide-vue-next';
+import {useConfigEncryption} from '@/composables/useConfigEncryption';
 
 const props = defineProps<{
     project: ProjectDetail;
@@ -16,9 +21,11 @@ const props = defineProps<{
 const emit = defineEmits<{
     (e: 'projectUpdated', project: ProjectDetail): void;
     (e: 'rotated'): void;
+    (e: 'reviewLocalChanges', items: { name: string; value: string }[]): void;
 }>();
 
 const router = useRouter();
+const { fetchAndDecryptConfig, encryptConfigItems } = useConfigEncryption();
 const error = ref('');
 const success = ref('');
 
@@ -26,9 +33,238 @@ const success = ref('');
 const editName = ref(props.project.name);
 const isSaving = ref(false);
 
+// File Mapping State
+const fileMapping = ref<FileMapping | null>(null);
+const syncStatus = ref<SyncStatus>('not_linked');
+const isLinking = ref(false);
+const isPulling = ref(false);
+const isPushing = ref(false);
+const fileMappingError = ref('');
+const fileMappingSuccess = ref('');
+
+// Push Preview Dialog State
+const showPushPreview = ref(false);
+const pushPreviewLocalItems = ref<{ name: string; value: string }[]>([]);
+const pushPreviewRemoteItems = ref<ConfigItem[]>([]);
+
 watch(() => props.project, (newVal) => {
     editName.value = newVal.name;
+    loadFileMapping();
 });
+
+onMounted(() => {
+    loadFileMapping();
+});
+
+async function loadFileMapping() {
+    try {
+        const mapping = await FileMappingService.getMapping(props.project.id);
+        fileMapping.value = mapping;
+
+        if (mapping && props.project.configChecksum) {
+            const result = await FileMappingService.checkSyncStatus(
+                props.project.id,
+                props.project.configChecksum
+            );
+            syncStatus.value = result.status;
+        } else if (mapping) {
+            syncStatus.value = 'synced'; // No remote checksum yet
+        } else {
+            syncStatus.value = 'not_linked';
+        }
+    } catch (e) {
+        console.error('Failed to load file mapping', e);
+    }
+}
+
+async function handleLinkFile() {
+    isLinking.value = true;
+    fileMappingError.value = '';
+    fileMappingSuccess.value = '';
+
+    try {
+        const selected = await open({
+            multiple: false,
+        });
+
+        if (selected && typeof selected === 'string') {
+            const mapping = await FileMappingService.linkFile(
+                props.project.id,
+                selected,
+                props.project.configChecksum || ''
+            );
+            fileMapping.value = mapping;
+            syncStatus.value = 'synced';
+            fileMappingSuccess.value = 'File linked successfully.';
+        }
+    } catch (e: any) {
+        fileMappingError.value = 'Failed to link file: ' + e.toString();
+    } finally {
+        isLinking.value = false;
+    }
+}
+
+async function handleUnlinkFile() {
+    fileMappingError.value = '';
+    fileMappingSuccess.value = '';
+
+    try {
+        await FileMappingService.unlinkFile(props.project.id);
+        fileMapping.value = null;
+        syncStatus.value = 'not_linked';
+        fileMappingSuccess.value = 'File unlinked.';
+    } catch (e: any) {
+        fileMappingError.value = 'Failed to unlink file: ' + e.toString();
+    }
+}
+
+async function handlePull() {
+    if (!fileMapping.value) return;
+
+    isPulling.value = true;
+    fileMappingError.value = '';
+    fileMappingSuccess.value = '';
+
+    try {
+        // Fetch and decrypt config items using composable
+        const decryptedItems = await fetchAndDecryptConfig(props.project.id, props.decryptedKey);
+
+        // Write to local file
+        const localChecksum = await FileMappingService.writeToLocalFile(
+            fileMapping.value.filePath,
+            decryptedItems
+        );
+
+        // Update sync state
+        await FileMappingService.updateSyncState(
+            props.project.id,
+            localChecksum,
+            props.project.configChecksum || ''
+        );
+
+        syncStatus.value = 'synced';
+        fileMappingSuccess.value = 'Local file updated from remote.';
+        await loadFileMapping();
+    } catch (e: any) {
+        fileMappingError.value = 'Pull failed: ' + e.toString();
+    } finally {
+        isPulling.value = false;
+    }
+}
+
+async function handlePushClick() {
+    if (!fileMapping.value) return;
+
+    fileMappingError.value = '';
+    fileMappingSuccess.value = '';
+
+    try {
+        // Read local file
+        const localItems = await FileMappingService.readLocalFile(fileMapping.value.filePath);
+
+        // Fetch and decrypt current remote config for comparison using composable
+        const decryptedConfigs = await fetchAndDecryptConfig(props.project.id, props.decryptedKey);
+
+        // Open preview dialog
+        pushPreviewLocalItems.value = localItems;
+        pushPreviewRemoteItems.value = decryptedConfigs;
+        showPushPreview.value = true;
+    } catch (e: any) {
+        fileMappingError.value = 'Failed to load changes: ' + e.toString();
+    }
+}
+
+async function handleDirectPush() {
+    if (!fileMapping.value) return;
+
+    isPushing.value = true;
+    fileMappingError.value = '';
+    fileMappingSuccess.value = '';
+
+    try {
+        // Merge local items into remote: update existing by name, add new ones
+        const remoteItems = [...pushPreviewRemoteItems.value];
+
+        for (const localItem of pushPreviewLocalItems.value) {
+            const existingIndex = remoteItems.findIndex(r => r.name === localItem.name);
+            if (existingIndex !== -1) {
+                // Update existing
+                remoteItems[existingIndex] = {
+                    ...remoteItems[existingIndex],
+                    value: localItem.value,
+                };
+            } else {
+                // Add new
+                remoteItems.push({
+                    id: crypto.randomUUID(),
+                    projectId: props.project.id,
+                    name: localItem.name,
+                    value: localItem.value,
+                    sensitive: true,
+                    position: remoteItems.length,
+                });
+            }
+        }
+
+        // Encrypt and save using composable
+        const itemsToSave = await encryptConfigItems(props.decryptedKey, remoteItems);
+        await ProjectService.syncConfig(props.project.id, itemsToSave);
+
+        // Reload project to get new checksum
+        const updatedProject = await ProjectService.getProject(props.project.id);
+
+        // Compute local checksum and update mapping
+        const localChecksum = await FileMappingService.computeChecksum(
+            pushPreviewLocalItems.value.map((item, index) => ({
+                id: '',
+                projectId: props.project.id,
+                name: item.name,
+                value: item.value,
+                sensitive: false,
+                position: index,
+            }))
+        );
+
+        await FileMappingService.updateSyncState(
+            props.project.id,
+            localChecksum,
+            updatedProject.configChecksum || ''
+        );
+
+        showPushPreview.value = false;
+        syncStatus.value = 'synced';
+        fileMappingSuccess.value = 'Changes pushed successfully.';
+
+        emit('projectUpdated', updatedProject);
+        await loadFileMapping();
+    } catch (e: any) {
+        fileMappingError.value = 'Push failed: ' + e.toString();
+    } finally {
+        isPushing.value = false;
+    }
+}
+
+function handleReviewChanges() {
+    // Emit to parent to switch to config tab in sync mode
+    emit('reviewLocalChanges', pushPreviewLocalItems.value);
+}
+
+function getSyncStatusDisplay(): { text: string; variant: 'success' | 'warning' | 'error' | 'muted' } {
+    switch (syncStatus.value) {
+        case 'synced':
+            return { text: 'Synced', variant: 'success' };
+        case 'local_changed':
+            return { text: 'Local file changed', variant: 'warning' };
+        case 'remote_changed':
+            return { text: 'Remote config changed', variant: 'warning' };
+        case 'both_changed':
+            return { text: 'Both changed', variant: 'error' };
+        case 'file_missing':
+            return { text: 'File missing', variant: 'error' };
+        default:
+            return { text: 'Not linked', variant: 'muted' };
+    }
+}
 
 async function handleUpdateName() {
     if (!editName.value || editName.value === props.project.name) return;
@@ -86,6 +322,110 @@ async function handleDelete() {
             </CardContent>
         </Card>
 
+        <!-- LOCAL .ENV FILE -->
+        <Card>
+            <CardHeader>
+                <CardTitle class="flex items-center gap-2">
+                    <FileText class="w-5 h-5" />
+                    Local .env File
+                </CardTitle>
+                <CardDescription>
+                    Link this project to a local .env file on your computer. Changes can be synced in either direction.
+                </CardDescription>
+            </CardHeader>
+            <CardContent class="space-y-4">
+                <!-- Not linked state -->
+                <div v-if="!fileMapping" class="flex flex-col items-center gap-4 py-4">
+                    <p class="text-sm text-muted-foreground text-center">
+                        No local file linked. Link a .env file to enable sync between local and remote configs.
+                    </p>
+                    <Button @click="handleLinkFile" :disabled="isLinking">
+                        <Link2 class="w-4 h-4 mr-2" />
+                        {{ isLinking ? 'Selecting...' : 'Link .env File' }}
+                    </Button>
+                </div>
+
+                <!-- Linked state -->
+                <div v-else class="space-y-4">
+                    <!-- File info -->
+                    <div class="flex items-start justify-between p-3 bg-muted/50 rounded-lg">
+                        <div class="flex items-start gap-3 min-w-0">
+                            <FileText class="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+                            <div class="min-w-0">
+                                <p class="text-sm font-medium truncate" :title="fileMapping.filePath">
+                                    {{ fileMapping.filePath }}
+                                </p>
+                                <p class="text-xs text-muted-foreground">
+                                    Linked {{ new Date(fileMapping.linkedAt).toLocaleDateString() }}
+                                </p>
+                            </div>
+                        </div>
+                        <Button variant="ghost" size="sm" @click="handleUnlinkFile">
+                            <Unlink class="w-4 h-4" />
+                        </Button>
+                    </div>
+
+                    <!-- Sync status -->
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <CheckCircle2 v-if="getSyncStatusDisplay().variant === 'success'" class="w-4 h-4 text-green-500" />
+                            <AlertCircle v-else-if="getSyncStatusDisplay().variant === 'error'" class="w-4 h-4 text-destructive" />
+                            <RefreshCw v-else-if="getSyncStatusDisplay().variant === 'warning'" class="w-4 h-4 text-orange-500" />
+                            <span class="text-sm" :class="{
+                                'text-green-600': getSyncStatusDisplay().variant === 'success',
+                                'text-destructive': getSyncStatusDisplay().variant === 'error',
+                                'text-orange-600': getSyncStatusDisplay().variant === 'warning',
+                                'text-muted-foreground': getSyncStatusDisplay().variant === 'muted'
+                            }">
+                                {{ getSyncStatusDisplay().text }}
+                            </span>
+                        </div>
+                        <Button variant="ghost" size="sm" @click="loadFileMapping">
+                            <RefreshCw class="w-4 h-4" />
+                        </Button>
+                    </div>
+
+                    <!-- Sync actions -->
+                    <div class="flex items-center gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            @click="handlePull"
+                            :disabled="isPulling || syncStatus === 'file_missing'"
+                            class="flex-1"
+                        >
+                            <Loader2 v-if="isPulling" class="w-4 h-4 mr-2 animate-spin" />
+                            <Download v-else class="w-4 h-4 mr-2" />
+                            Pull (Remote → Local)
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            @click="handlePushClick"
+                            :disabled="syncStatus === 'file_missing'"
+                            class="flex-1"
+                        >
+                            <Upload class="w-4 h-4 mr-2" />
+                            Push (Local → Remote)
+                        </Button>
+                    </div>
+
+                    <p class="text-xs text-muted-foreground">
+                        <strong>Pull:</strong> Overwrites local file with remote config.
+                        <strong>Push:</strong> Push local changes to Envie.
+                    </p>
+                </div>
+
+                <!-- Success/Error messages -->
+                <div v-if="fileMappingSuccess" class="text-sm text-green-600 font-medium">
+                    {{ fileMappingSuccess }}
+                </div>
+                <div v-if="fileMappingError" class="text-sm text-destructive">
+                    {{ fileMappingError }}
+                </div>
+            </CardContent>
+        </Card>
+
         <!-- KEY ROTATION -->
         <KeyRotation
             :project="project"
@@ -115,4 +455,14 @@ async function handleDelete() {
             </CardContent>
         </Card>
     </div>
+
+    <!-- Push Preview Dialog -->
+    <PushPreviewDialog
+        v-model:open="showPushPreview"
+        :local-items="pushPreviewLocalItems"
+        :remote-items="pushPreviewRemoteItems"
+        :is-pushing="isPushing"
+        @push="handleDirectPush"
+        @review="handleReviewChanges"
+    />
 </template>

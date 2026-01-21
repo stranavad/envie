@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-vue-next';
+import { Plus, Loader2 } from 'lucide-vue-next';
 import ProjectListItem, { type ProjectListItemData } from '@/components/project/ProjectListItem.vue';
 import CreateProjectDialog from '@/components/project/CreateProjectDialog.vue';
 import { useOrganizationStore } from '@/stores/organization';
@@ -27,9 +27,14 @@ const store = useOrganizationStore();
 
 const projects = ref<ProjectListItemData[]>([]);
 const isCreateProjectOpen = ref(false);
+const isLoading = ref(true);
 
 onMounted(async () => {
-    await loadProjects();
+    try {
+        await loadProjects();
+    } finally {
+        isLoading.value = false;
+    }
 });
 
 async function loadProjects() {
@@ -71,7 +76,12 @@ defineExpose({ loadProjects });
             </Button>
         </div>
 
-        <div v-if="projects.length > 0" class="bg-card rounded-lg border shadow-sm">
+        <!-- Loading State -->
+        <div v-if="isLoading" class="flex items-center justify-center py-12">
+            <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+
+        <div v-else-if="projects.length > 0" class="bg-card rounded-lg border shadow-sm">
             <div class="divide-y divide-border">
                 <ProjectListItem
                     v-for="project in projects"

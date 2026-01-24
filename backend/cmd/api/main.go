@@ -111,6 +111,11 @@ func main() {
 		authorized.DELETE("/projects/:id/rotation/:rotationId", handlers.CancelKeyRotation)
 		authorized.GET("/pending-rotations", handlers.GetUserPendingRotations)
 
+		// Project Tokens (CLI tokens for CI/CD)
+		authorized.POST("/projects/:id/tokens", handlers.CreateProjectToken)
+		authorized.GET("/projects/:id/tokens", handlers.GetProjectTokens)
+		authorized.DELETE("/projects/:id/tokens/:tokenId", handlers.DeleteProjectToken)
+
 		// Project Files
 		authorized.GET("/projects/:id/files", handlers.ListProjectFiles)
 		authorized.POST("/projects/:id/files", handlers.UploadProjectFile)
@@ -141,6 +146,13 @@ func main() {
 		authorized.POST("/teams/:id/members", handlers.AddTeamMember)
 		authorized.PUT("/teams/:id/members/:userId", handlers.UpdateTeamMember)
 		authorized.DELETE("/teams/:id/members/:userId", handlers.RemoveTeamMember)
+	}
+
+	cli := r.Group("/v1")
+	cli.Use(middleware.CLIAuthMiddleware())
+	{
+		cli.GET("/cli/verify", handlers.VerifyCLIIdentity)
+		cli.GET("/projects/:id/config", handlers.GetCLIProjectConfig)
 	}
 
 	r.Run(":8080")

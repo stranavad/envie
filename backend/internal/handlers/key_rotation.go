@@ -142,15 +142,19 @@ func InitiateKeyRotation(c *gin.Context) {
 		SnapshotConfigItemsHash:      configItemsHash,
 	}
 
+	var tokenCount int64
+	database.DB.Model(&models.ProjectToken{}).Where("project_id = ?", projectID).Count(&tokenCount)
+
 	if requiredApprovals == 0 {
 		if err := commitRotation(&pending, &project); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit rotation: " + err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"message":    "Key rotation completed immediately (single admin)",
-			"newVersion": newVersion,
-			"committed":  true,
+			"message":              "Key rotation completed immediately (single admin)",
+			"newVersion":           newVersion,
+			"committed":            true,
+			"tokensInvalidated":    tokenCount,
 		})
 		return
 	}
@@ -161,11 +165,12 @@ func InitiateKeyRotation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":           "Key rotation initiated, awaiting approval",
-		"rotationId":        pending.ID,
-		"requiredApprovals": requiredApprovals,
-		"expiresAt":         pending.ExpiresAt,
-		"committed":         false,
+		"message":              "Key rotation initiated, awaiting approval",
+		"rotationId":           pending.ID,
+		"requiredApprovals":    requiredApprovals,
+		"expiresAt":            pending.ExpiresAt,
+		"committed":            false,
+		"tokensToBeInvalidated": tokenCount,
 	})
 }
 
@@ -415,6 +420,11 @@ func commitRotation(pending *models.PendingKeyRotation, project *models.Project)
 			tx.Rollback()
 			return err
 		}
+	}
+
+	if err := tx.Where("project_id = ?", project.ID).Delete(&models.ProjectToken{}).Error; err != nil {
+		tx.Rollback()
+		return err
 	}
 
 	return tx.Commit().Error

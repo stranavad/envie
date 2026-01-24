@@ -118,6 +118,11 @@ func RespondError(c *gin.Context, status int, message string) {
 	c.JSON(status, gin.H{"error": message})
 }
 
+// RespondUnauthorized is a shorthand for 401 Unauthorized errors.
+func RespondUnauthorized(c *gin.Context, message string) {
+	c.JSON(http.StatusUnauthorized, gin.H{"error": message})
+}
+
 // RespondBadRequest is a shorthand for 400 Bad Request errors.
 func RespondBadRequest(c *gin.Context, message string) {
 	c.JSON(http.StatusBadRequest, gin.H{"error": message})

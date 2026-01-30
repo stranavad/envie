@@ -23,7 +23,7 @@ func Connect() {
 		PreferSimpleProtocol: true,
 	}), &gorm.Config{
 		SkipDefaultTransaction: true,
-		PrepareStmt:            true,
+		PrepareStmt:            false,
 	})
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)

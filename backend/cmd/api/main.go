@@ -86,6 +86,7 @@ func main() {
 		// Project Routes
 		authorized.POST("/projects", handlers.CreateProject)
 		authorized.GET("/projects", handlers.GetProjects)
+		authorized.GET("/projects/organization/:id", handlers.GetOrganizationProjects)
 		authorized.GET("/projects/:id", handlers.GetProject)
 		authorized.PUT("/projects/:id", handlers.UpdateProject)
 		// Config Items

@@ -35,25 +35,48 @@ type ProjectResponse struct {
 	TeamName            string    `json:"teamName"`
 	TeamRole            string    `json:"teamRole,omitempty"`
 	OrgRole             string    `json:"orgRole,omitempty"`
-	CanEdit        bool   `json:"canEdit"`
-	CanDelete      bool   `json:"canDelete"`
-	KeyVersion     int    `json:"keyVersion"`
-	ConfigChecksum string `json:"configChecksum,omitempty"`
+	CanEdit             bool      `json:"canEdit"`
+	CanDelete           bool      `json:"canDelete"`
+	KeyVersion          int       `json:"keyVersion"`
+	ConfigChecksum      string    `json:"configChecksum,omitempty"`
 }
 
 type ProjectListItem struct {
-	ID                  uuid.UUID `json:"id"`
-	Name                string    `json:"name"`
-	OrganizationID      uuid.UUID `json:"organizationId"`
-	OrganizationName    string    `json:"organizationName"`
-	TeamID              uuid.UUID `json:"teamId"`
-	TeamName            string    `json:"teamName"`
-	EncryptedProjectKey string    `json:"encryptedProjectKey"`
-	EncryptedTeamKey    string    `json:"encryptedTeamKey,omitempty"`
-	KeyVersion          int       `json:"keyVersion"`
-	ConfigChecksum      string    `json:"configChecksum,omitempty"`
-	CreatedAt           string    `json:"createdAt"`
-	UpdatedAt           string    `json:"updatedAt"`
+	ID               uuid.UUID `json:"id"`
+	Name             string    `json:"name"`
+	OrganizationID   uuid.UUID `json:"organizationId"`
+	OrganizationName string    `json:"organizationName"`
+	KeyVersion       int       `json:"keyVersion"`
+	ConfigChecksum   string    `json:"configChecksum,omitempty"`
+	CreatedAt        string    `json:"createdAt"`
+	UpdatedAt        string    `json:"updatedAt"`
+}
+
+type projectWithOrg struct {
+	models.Project
+	Organization models.Organization `gorm:"embedded;embeddedPrefix:org_"`
+}
+
+func mapProjectsToListItems(results []projectWithOrg) []ProjectListItem {
+	projects := make([]ProjectListItem, 0, len(results))
+	for _, r := range results {
+		configChecksum := ""
+		if r.ConfigChecksum != nil {
+			configChecksum = *r.ConfigChecksum
+		}
+
+		projects = append(projects, ProjectListItem{
+			ID:               r.ID,
+			Name:             r.Name,
+			OrganizationID:   r.OrganizationID,
+			OrganizationName: r.Organization.Name,
+			KeyVersion:       r.KeyVersion,
+			ConfigChecksum:   configChecksum,
+			CreatedAt:        r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			UpdatedAt:        r.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	return projects
 }
 
 func CreateProject(c *gin.Context) {
@@ -142,152 +165,72 @@ func GetProjects(c *gin.Context) {
 		return
 	}
 
-	var teamUsers []models.TeamUser
-	if err := database.DB.Where("user_id = ?", uid).Find(&teamUsers).Error; err != nil {
-		RespondInternalError(c, "Failed to fetch team memberships")
-		return
-	}
+	var results []projectWithOrg
+	err := database.DB.Raw(`
+		SELECT projects.*, organizations.id as org_id, organizations.name as org_name
+		FROM projects
+		JOIN organizations ON organizations.id = projects.organization_id
+		JOIN team_projects ON team_projects.project_id = projects.id
+		JOIN team_users ON team_users.team_id = team_projects.team_id
+		WHERE team_users.user_id = ?
 
-	userTeamKeys := make(map[uuid.UUID]string)
-	var userTeamIDs []uuid.UUID
-	for _, tu := range teamUsers {
-		userTeamIDs = append(userTeamIDs, tu.TeamID)
-		userTeamKeys[tu.TeamID] = tu.EncryptedTeamKey
-	}
+		UNION
 
-	var orgUsers []models.OrganizationUser
-	if err := database.DB.Where("user_id = ? AND (role = 'owner' OR role = 'Owner' OR role = 'admin')", uid).Find(&orgUsers).Error; err != nil {
-		RespondInternalError(c, "Failed to fetch organization memberships")
-		return
-	}
+		SELECT projects.*, organizations.id as org_id, organizations.name as org_name
+		FROM projects
+		JOIN organizations ON organizations.id = projects.organization_id
+		JOIN organization_users ON organization_users.organization_id = projects.organization_id
+		WHERE organization_users.user_id = ?
+		AND (organization_users.role = 'admin' OR organization_users.role = 'owner')
 
-	var adminOrgIDs []uuid.UUID
-	for _, ou := range orgUsers {
-		adminOrgIDs = append(adminOrgIDs, ou.OrganizationID)
-	}
+		ORDER BY updated_at DESC
+	`, uid, uid).Scan(&results).Error
 
-	var projectIDs []uuid.UUID
-
-	if len(userTeamIDs) > 0 {
-		var teamProjectIDs []uuid.UUID
-		database.DB.Model(&models.TeamProject{}).
-			Where("team_id IN ?", userTeamIDs).
-			Distinct().
-			Pluck("project_id", &teamProjectIDs)
-		projectIDs = append(projectIDs, teamProjectIDs...)
-	}
-
-	if len(adminOrgIDs) > 0 {
-		var orgProjectIDs []uuid.UUID
-		database.DB.Model(&models.Project{}).
-			Where("organization_id IN ?", adminOrgIDs).
-			Pluck("id", &orgProjectIDs)
-		projectIDs = append(projectIDs, orgProjectIDs...)
-	}
-
-	projectIDSet := make(map[uuid.UUID]bool)
-	for _, id := range projectIDs {
-		projectIDSet[id] = true
-	}
-
-	if len(projectIDSet) == 0 {
-		RespondOK(c, []ProjectListItem{})
-		return
-	}
-
-	uniqueProjectIDs := make([]uuid.UUID, 0, len(projectIDSet))
-	for id := range projectIDSet {
-		uniqueProjectIDs = append(uniqueProjectIDs, id)
-	}
-
-	var dbProjects []models.Project
-	if err := database.DB.Where("id IN ?", uniqueProjectIDs).Order("updated_at DESC").Find(&dbProjects).Error; err != nil {
+	if err != nil {
 		RespondInternalError(c, "Failed to fetch projects")
 		return
 	}
 
-	var orgIDs []uuid.UUID
-	for _, p := range dbProjects {
-		orgIDs = append(orgIDs, p.OrganizationID)
+	RespondOK(c, mapProjectsToListItems(results))
+}
+
+func GetOrganizationProjects(c *gin.Context) {
+	uid, ok := GetAuthUserID(c)
+	if !ok {
+		return
+	}
+	orgID, ok := ParseUUIDParam(c, "id", "organization")
+	if !ok {
+		return
 	}
 
-	var organizations []models.Organization
-	database.DB.Where("id IN ?", orgIDs).Find(&organizations)
-	orgMap := make(map[uuid.UUID]models.Organization)
-	for _, org := range organizations {
-		orgMap[org.ID] = org
+	var results []projectWithOrg
+	err := database.DB.Raw(`
+		SELECT projects.*, organizations.id as org_id, organizations.name as org_name
+		FROM projects
+		JOIN organizations ON organizations.id = projects.organization_id
+		JOIN team_projects ON team_projects.project_id = projects.id
+		JOIN team_users ON team_users.team_id = team_projects.team_id
+		WHERE team_users.user_id = ? AND projects.organization_id = ?
+
+		UNION
+
+		SELECT projects.*, organizations.id as org_id, organizations.name as org_name
+		FROM projects
+		JOIN organizations ON organizations.id = projects.organization_id
+		JOIN organization_users ON organization_users.organization_id = projects.organization_id
+		WHERE organization_users.user_id = ? AND projects.organization_id = ?
+		AND (organization_users.role = 'admin' OR organization_users.role = 'owner')
+
+		ORDER BY updated_at DESC
+	`, uid, orgID, uid, orgID).Scan(&results).Error
+
+	if err != nil {
+		RespondInternalError(c, "Failed to fetch projects")
+		return
 	}
 
-	var teamProjects []models.TeamProject
-	database.DB.Where("project_id IN ?", uniqueProjectIDs).Find(&teamProjects)
-
-	var allTeamIDs []uuid.UUID
-	for _, tp := range teamProjects {
-		allTeamIDs = append(allTeamIDs, tp.TeamID)
-	}
-
-	var teams []models.Team
-	if len(allTeamIDs) > 0 {
-		database.DB.Where("id IN ?", allTeamIDs).Find(&teams)
-	}
-	teamMap := make(map[uuid.UUID]models.Team)
-	for _, t := range teams {
-		teamMap[t.ID] = t
-	}
-
-	type teamInfo struct {
-		TeamID              uuid.UUID
-		TeamName            string
-		EncryptedProjectKey string
-		EncryptedTeamKey    string
-	}
-	projectTeamInfo := make(map[uuid.UUID]teamInfo)
-
-	for _, tp := range teamProjects {
-		team := teamMap[tp.TeamID]
-		info := teamInfo{
-			TeamID:              tp.TeamID,
-			TeamName:            team.Name,
-			EncryptedProjectKey: tp.EncryptedProjectKey,
-			EncryptedTeamKey:    userTeamKeys[tp.TeamID],
-		}
-
-		existing, exists := projectTeamInfo[tp.ProjectID]
-		if !exists {
-			projectTeamInfo[tp.ProjectID] = info
-		} else if info.EncryptedTeamKey != "" && existing.EncryptedTeamKey == "" {
-			// Prefer team where user has membership (has encrypted team key)
-			projectTeamInfo[tp.ProjectID] = info
-		}
-	}
-
-	projects := make([]ProjectListItem, 0, len(dbProjects))
-	for _, p := range dbProjects {
-		org := orgMap[p.OrganizationID]
-		ti := projectTeamInfo[p.ID]
-
-		configChecksum := ""
-		if p.ConfigChecksum != nil {
-			configChecksum = *p.ConfigChecksum
-		}
-
-		projects = append(projects, ProjectListItem{
-			ID:                  p.ID,
-			Name:                p.Name,
-			OrganizationID:      p.OrganizationID,
-			OrganizationName:    org.Name,
-			TeamID:              ti.TeamID,
-			TeamName:            ti.TeamName,
-			EncryptedProjectKey: ti.EncryptedProjectKey,
-			EncryptedTeamKey:    ti.EncryptedTeamKey,
-			KeyVersion:          p.KeyVersion,
-			ConfigChecksum:      configChecksum,
-			CreatedAt:           p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			UpdatedAt:           p.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		})
-	}
-
-	RespondOK(c, projects)
+	RespondOK(c, mapProjectsToListItems(results))
 }
 
 func GetProject(c *gin.Context) {
@@ -335,10 +278,10 @@ func GetProject(c *gin.Context) {
 		EncryptedTeamKey:    access.EncryptedTeamKey,
 		TeamRole:            access.TeamRole,
 		OrgRole:             access.OrgRole,
-		CanEdit:        access.CanEdit,
-		CanDelete:      access.CanDelete,
-		KeyVersion:     access.Project.KeyVersion,
-		ConfigChecksum: configChecksum,
+		CanEdit:             access.CanEdit,
+		CanDelete:           access.CanDelete,
+		KeyVersion:          access.Project.KeyVersion,
+		ConfigChecksum:      configChecksum,
 	}
 
 	if access.Team != nil {
@@ -462,9 +405,9 @@ type OrgUserInfo struct {
 }
 
 type ProjectAccessResponse struct {
-	Teams               []TeamWithUsers `json:"teams"`
-	OrganizationAdmins  []OrgUserInfo   `json:"organizationAdmins"`
-	AvailableTeams      []TeamWithUsers `json:"availableTeams"`
+	Teams              []TeamWithUsers `json:"teams"`
+	OrganizationAdmins []OrgUserInfo   `json:"organizationAdmins"`
+	AvailableTeams     []TeamWithUsers `json:"availableTeams"`
 }
 
 func GetProjectTeams(c *gin.Context) {

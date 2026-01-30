@@ -381,11 +381,9 @@ func DeleteProject(c *gin.Context) {
 }
 
 type TeamWithUsers struct {
-	ID           uuid.UUID      `json:"id"`
-	Name         string         `json:"name"`
-	MemberCount  int64          `json:"memberCount"`
-	ProjectCount int64          `json:"projectCount"`
-	Users        []TeamUserInfo `json:"users"`
+	ID    uuid.UUID      `json:"id"`
+	Name  string         `json:"name"`
+	Users []TeamUserInfo `json:"users"`
 }
 
 type TeamUserInfo struct {
@@ -396,18 +394,23 @@ type TeamUserInfo struct {
 	Role      string    `json:"role"`
 }
 
-type OrgUserInfo struct {
+type OrganizationAdmin struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	AvatarURL string    `json:"avatarUrl"`
-	Role      string    `json:"role"`
+	OrgRole   string    `json:"orgRole"`
+}
+
+type AvailableTeam struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 }
 
 type ProjectAccessResponse struct {
-	Teams              []TeamWithUsers `json:"teams"`
-	OrganizationAdmins []OrgUserInfo   `json:"organizationAdmins"`
-	AvailableTeams     []TeamWithUsers `json:"availableTeams"`
+	Teams              []TeamWithUsers     `json:"teams"`
+	OrganizationAdmins []OrganizationAdmin `json:"organizationAdmins"`
+	AvailableTeams     []AvailableTeam     `json:"availableTeams"`
 }
 
 func GetProjectTeams(c *gin.Context) {
@@ -427,158 +430,125 @@ func GetProjectTeams(c *gin.Context) {
 		return
 	}
 
-	var allOrgTeams []models.Team
-	database.DB.Where("organization_id = ?", access.Project.OrganizationID).Find(&allOrgTeams)
+	orgID := access.Project.OrganizationID
 
-	if len(allOrgTeams) == 0 {
-		RespondOK(c, ProjectAccessResponse{
-			Teams:              []TeamWithUsers{},
-			OrganizationAdmins: []OrgUserInfo{},
-			AvailableTeams:     []TeamWithUsers{},
-		})
+	// Query 1: Get teams with their users
+	type teamUserRow struct {
+		models.Team
+		Role          *string    `gorm:"column:role"`
+		UserID        *uuid.UUID `gorm:"column:user_id"`
+		UserName      *string    `gorm:"column:user_name"`
+		UserEmail     *string    `gorm:"column:user_email"`
+		UserAvatarURL *string    `gorm:"column:user_avatar_url"`
+	}
+	var rows []teamUserRow
+	if err := database.DB.Raw(`
+		SELECT teams.*, team_users.role, users.id as user_id, users.name as user_name,
+		       users.email as user_email, users.avatar_url as user_avatar_url
+		FROM teams
+		LEFT JOIN team_users ON team_users.team_id = teams.id
+		LEFT JOIN users ON team_users.user_id = users.id
+		WHERE teams.id IN (
+			SELECT team_id FROM team_projects WHERE project_id = ?
+		)
+	`, projectID).Scan(&rows).Error; err != nil {
+		RespondInternalError(c, "Failed to fetch teams")
 		return
 	}
 
-	var teamProjects []models.TeamProject
-	database.DB.Where("project_id = ?", projectID).Find(&teamProjects)
-
-	teamIDsWithAccess := make(map[uuid.UUID]bool)
-	for _, tp := range teamProjects {
-		teamIDsWithAccess[tp.TeamID] = true
-	}
-
-	allTeamIDs := make([]uuid.UUID, len(allOrgTeams))
-	for i, t := range allOrgTeams {
-		allTeamIDs[i] = t.ID
-	}
-
-	type CountResult struct {
-		TeamID uuid.UUID
-		Count  int64
-	}
-	var memberCounts []CountResult
-	database.DB.Model(&models.TeamUser{}).
-		Select("team_id, COUNT(*) as count").
-		Where("team_id IN ?", allTeamIDs).
-		Group("team_id").
-		Scan(&memberCounts)
-
-	memberCountMap := make(map[uuid.UUID]int64)
-	for _, mc := range memberCounts {
-		memberCountMap[mc.TeamID] = mc.Count
-	}
-
-	var projectCounts []CountResult
-	database.DB.Model(&models.TeamProject{}).
-		Select("team_id, COUNT(*) as count").
-		Where("team_id IN ?", allTeamIDs).
-		Group("team_id").
-		Scan(&projectCounts)
-
-	projectCountMap := make(map[uuid.UUID]int64)
-	for _, pc := range projectCounts {
-		projectCountMap[pc.TeamID] = pc.Count
-	}
-
-	accessTeamIDs := make([]uuid.UUID, 0, len(teamIDsWithAccess))
-	for teamID := range teamIDsWithAccess {
-		accessTeamIDs = append(accessTeamIDs, teamID)
-	}
-
-	teamUsersMap := make(map[uuid.UUID][]TeamUserInfo)
-	if len(accessTeamIDs) > 0 {
-		type TeamUserWithInfo struct {
-			TeamID    uuid.UUID
-			UserID    uuid.UUID
-			Name      string
-			Email     string
-			AvatarURL string `gorm:"column:avatar_url"`
-			Role      string
+	teamsMap := make(map[uuid.UUID]*TeamWithUsers)
+	for _, row := range rows {
+		if _, exists := teamsMap[row.Team.ID]; !exists {
+			teamsMap[row.Team.ID] = &TeamWithUsers{
+				ID:    row.Team.ID,
+				Name:  row.Team.Name,
+				Users: []TeamUserInfo{},
+			}
 		}
-		var teamUsersWithInfo []TeamUserWithInfo
-		database.DB.Model(&models.TeamUser{}).
-			Select("team_users.team_id, users.id as user_id, users.name, users.email, users.avatar_url, team_users.role").
-			Joins("JOIN users ON users.id = team_users.user_id").
-			Where("team_users.team_id IN ?", accessTeamIDs).
-			Scan(&teamUsersWithInfo)
-
-		for _, tu := range teamUsersWithInfo {
-			teamUsersMap[tu.TeamID] = append(teamUsersMap[tu.TeamID], TeamUserInfo{
-				ID:        tu.UserID,
-				Name:      tu.Name,
-				Email:     tu.Email,
-				AvatarURL: tu.AvatarURL,
-				Role:      tu.Role,
+		if row.UserID != nil {
+			userName := ""
+			if row.UserName != nil {
+				userName = *row.UserName
+			}
+			userEmail := ""
+			if row.UserEmail != nil {
+				userEmail = *row.UserEmail
+			}
+			userAvatarURL := ""
+			if row.UserAvatarURL != nil {
+				userAvatarURL = *row.UserAvatarURL
+			}
+			teamsMap[row.Team.ID].Users = append(teamsMap[row.Team.ID].Users, TeamUserInfo{
+				ID:        *row.UserID,
+				Name:      userName,
+				Email:     userEmail,
+				AvatarURL: userAvatarURL,
+				Role:      *row.Role,
 			})
 		}
 	}
 
-	teams := []TeamWithUsers{}
-	teamMap := make(map[uuid.UUID]models.Team)
-	for _, team := range allOrgTeams {
-		teamMap[team.ID] = team
+	// Query 2: Get available teams (org teams not assigned to this project)
+	teamIDs := make([]uuid.UUID, 0, len(teamsMap))
+	for id := range teamsMap {
+		teamIDs = append(teamIDs, id)
 	}
 
-	for teamID := range teamIDsWithAccess {
-		team, exists := teamMap[teamID]
-		if !exists {
-			continue
-		}
-		users := teamUsersMap[teamID]
-		if users == nil {
-			users = []TeamUserInfo{}
-		}
-		teams = append(teams, TeamWithUsers{
-			ID:           team.ID,
-			Name:         team.Name,
-			MemberCount:  memberCountMap[team.ID],
-			ProjectCount: projectCountMap[team.ID],
-			Users:        users,
-		})
+	var availableTeams []AvailableTeam
+	if len(teamIDs) > 0 {
+		database.DB.Model(&models.Team{}).
+			Select("id, name").
+			Where("organization_id = ? AND id NOT IN ?", orgID, teamIDs).
+			Scan(&availableTeams)
+	} else {
+		database.DB.Model(&models.Team{}).
+			Select("id, name").
+			Where("organization_id = ?", orgID).
+			Scan(&availableTeams)
+	}
+	if availableTeams == nil {
+		availableTeams = []AvailableTeam{}
 	}
 
-	// Build available teams (no access yet)
-	availableTeams := []TeamWithUsers{}
-	for _, team := range allOrgTeams {
-		if teamIDsWithAccess[team.ID] {
-			continue
+	// Query 3: Get org admins/owners who are NOT in any team with project access
+	type orgAdminRow struct {
+		OrgRole string `gorm:"column:org_role"`
+		models.User
+	}
+	var adminRows []orgAdminRow
+	database.DB.Raw(`
+		SELECT organization_users.role as org_role, users.*
+		FROM organization_users
+		JOIN users ON users.id = organization_users.user_id
+		WHERE organization_users.organization_id = ?
+		AND (organization_users.role = 'admin' OR organization_users.role = 'owner')
+		AND users.id NOT IN (
+			SELECT team_users.user_id
+			FROM team_users
+			JOIN team_projects ON team_projects.team_id = team_users.team_id
+			WHERE team_projects.project_id = ?
+		)
+	`, orgID, projectID).Scan(&adminRows)
+
+	orgAdmins := make([]OrganizationAdmin, len(adminRows))
+	for i, row := range adminRows {
+		orgAdmins[i] = OrganizationAdmin{
+			ID:        row.User.ID,
+			Name:      row.User.Name,
+			Email:     row.User.Email,
+			AvatarURL: row.User.AvatarURL,
+			OrgRole:   row.OrgRole,
 		}
-		availableTeams = append(availableTeams, TeamWithUsers{
-			ID:           team.ID,
-			Name:         team.Name,
-			MemberCount:  memberCountMap[team.ID],
-			ProjectCount: projectCountMap[team.ID],
-			Users:        []TeamUserInfo{},
-		})
 	}
 
-	type OrgAdminWithInfo struct {
-		UserID    uuid.UUID `gorm:"column:user_id"`
-		Name      string
-		Email     string
-		AvatarURL string `gorm:"column:avatar_url"`
-		Role      string
-	}
-	var orgAdminsWithInfo []OrgAdminWithInfo
-	database.DB.Model(&models.OrganizationUser{}).
-		Select("organization_users.user_id, users.name, users.email, users.avatar_url, organization_users.role").
-		Joins("JOIN users ON users.id = organization_users.user_id").
-		Where("organization_users.organization_id = ? AND (organization_users.role = 'owner' OR organization_users.role = 'Owner' OR organization_users.role = 'admin')", access.Project.OrganizationID).
-		Scan(&orgAdminsWithInfo)
-
-	orgAdmins := make([]OrgUserInfo, len(orgAdminsWithInfo))
-	for i, oa := range orgAdminsWithInfo {
-		orgAdmins[i] = OrgUserInfo{
-			ID:        oa.UserID,
-			Name:      oa.Name,
-			Email:     oa.Email,
-			AvatarURL: oa.AvatarURL,
-			Role:      oa.Role,
-		}
+	// Build response
+	teamsResponse := make([]TeamWithUsers, 0, len(teamsMap))
+	for _, t := range teamsMap {
+		teamsResponse = append(teamsResponse, *t)
 	}
 
 	RespondOK(c, ProjectAccessResponse{
-		Teams:              teams,
+		Teams:              teamsResponse,
 		OrganizationAdmins: orgAdmins,
 		AvailableTeams:     availableTeams,
 	})

@@ -8,13 +8,12 @@ import (
 )
 
 type LinkingCode struct {
-	ID              uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	Code            string     `gorm:"size:32;uniqueIndex;not null" json:"code"`
-	UserID          uuid.UUID  `gorm:"type:uuid;not null" json:"userId"`
-	DevicePublicKey string     `gorm:"type:text" json:"devicePublicKey"`
-	ExpiresAt       time.Time  `gorm:"not null" json:"expiresAt"`
-	UsedAt          *time.Time `json:"usedAt"`
-	CreatedAt       time.Time  `json:"createdAt"`
+	ID        uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	Code      string     `gorm:"size:32;uniqueIndex;not null" json:"code"`
+	UserID    uuid.UUID  `gorm:"type:uuid;not null" json:"userId"`
+	ExpiresAt time.Time  `gorm:"not null" json:"expiresAt"`
+	UsedAt    *time.Time `json:"usedAt"`
+	CreatedAt time.Time  `json:"createdAt"`
 }
 
 func (lc *LinkingCode) BeforeCreate(tx *gorm.DB) (err error) {

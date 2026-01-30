@@ -6,7 +6,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -21,16 +20,7 @@ import (
 )
 
 func AuthLogin(c *gin.Context) {
-	publicKey := c.Query("public_key")
-
-	if publicKey == "" {
-		RespondBadRequest(c, "Public key is required")
-		return
-	}
-
-	state := "pk=" + url.QueryEscape(publicKey)
-
-	authURL := auth.OAuthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
+	authURL := auth.OAuthConfig.AuthCodeURL("", oauth2.AccessTypeOffline)
 	c.Redirect(http.StatusTemporaryRedirect, authURL)
 }
 
@@ -47,17 +37,6 @@ func AuthCallback(c *gin.Context) {
 	if len(returnedState) == 0 {
 		RespondUnauthorized(c, "Missing state")
 		return
-	}
-
-	stateValues, err := url.ParseQuery(returnedState)
-	if err != nil {
-		RespondBadRequest(c, "Invalid state")
-		return
-	}
-
-	publicKey := stateValues.Get("pk")
-	if publicKey == "" {
-		RespondBadRequest(c, "Missing PK state")
 	}
 
 	var user models.User
@@ -106,10 +85,9 @@ func AuthCallback(c *gin.Context) {
 	}
 
 	linkingCodeRecord := models.LinkingCode{
-		Code:            strings.ToUpper(linkingCode),
-		UserID:          user.ID,
-		DevicePublicKey: publicKey,
-		ExpiresAt:       time.Now().Add(auth.LinkingCodeDuration),
+		Code:      strings.ToUpper(linkingCode),
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(auth.LinkingCodeDuration),
 	}
 
 	if err := database.DB.Create(&linkingCodeRecord).Error; err != nil {

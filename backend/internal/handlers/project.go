@@ -522,13 +522,7 @@ func GetProjectTeams(c *gin.Context) {
 		JOIN users ON users.id = organization_users.user_id
 		WHERE organization_users.organization_id = ?
 		AND (organization_users.role = 'admin' OR organization_users.role = 'owner')
-		AND users.id NOT IN (
-			SELECT team_users.user_id
-			FROM team_users
-			JOIN team_projects ON team_projects.team_id = team_users.team_id
-			WHERE team_projects.project_id = ?
-		)
-	`, orgID, projectID).Scan(&adminRows)
+	`, orgID).Scan(&adminRows)
 
 	orgAdmins := make([]OrganizationAdmin, len(adminRows))
 	for i, row := range adminRows {

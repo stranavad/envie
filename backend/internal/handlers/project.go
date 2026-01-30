@@ -399,7 +399,7 @@ type OrganizationAdmin struct {
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	AvatarURL string    `json:"avatarUrl"`
-	OrgRole   string    `json:"orgRole"`
+	OrgRole   string    `json:"role"`
 }
 
 type AvailableTeam struct {

@@ -1,5 +1,6 @@
 import {x25519} from '@noble/curves/ed25519.js';
 import {sha256} from "@noble/hashes/sha2.js";
+import {hkdf} from "@noble/hashes/hkdf.js";
 
 
 export interface KeyPair {
@@ -45,18 +46,13 @@ export class EncryptionService {
         };
     }
 
-    /**
-     * Generate a random AES key for project symmetric encryption
-     */
+
     static generateAesKey(): string {
         const key = crypto.getRandomValues(new Uint8Array(32));
         return bytesToBase64(key);
     }
 
-    /**
-     * AES-GCM Symmetric Encryption
-     * Matches Rust: [Nonce (12)][Ciphertext]
-     */
+
     static async encryptValue(keyB64: string, plaintext: string): Promise<string> {
         const keyBytes = base64ToBytes(keyB64);
         if (keyBytes.length !== 32) throw new Error("Invalid key length");
@@ -89,10 +85,6 @@ export class EncryptionService {
         return bytesToBase64(combined);
     }
 
-    /**
-     * AES-GCM Symmetric Decryption
-     * Expects: [Nonce (12)][Ciphertext]
-     */
     static async decryptValue(keyB64: string, combinedB64: string): Promise<string> {
         const keyBytes = base64ToBytes(keyB64);
         if (keyBytes.length !== 32) throw new Error("Invalid key length");
@@ -124,21 +116,9 @@ export class EncryptionService {
         return decBuilder.decode(plaintextBuffer);
     }
 
-    /**
-     * Asymmetric Encryption (ECDH + AES-GCM)
-     * Matches Rust logic:
-     * 1. Ephemeral Key Pair
-     * 2. ECDH Shared Secret (Ephemeral Priv + Recipient Pub)
-     * 3. HKDF/Hash (SHA256) -> Single AES Key
-     * 4. Encrypt Payload
-     * 5. Pack: [Ephemeral Public (32)][Nonce (12)][Ciphertext]
-     */
+
     static async encryptKey(recipientPublicKeyB64: string, inputDataB64: string): Promise<string> {
         const recipientPub = base64ToBytes(recipientPublicKeyB64);
-
-        // Input payload is expected to be Base64 string in the Rust version? 
-        // "input_data" in Rust is decoded from Base64 before encryption.
-        // So we need to decode it first to get the raw bytes to encrypt.
         const payload = base64ToBytes(inputDataB64);
 
         // 1. Ephemeral Key
@@ -148,11 +128,8 @@ export class EncryptionService {
         // 2. Shared Secret
         const sharedSecret = x25519.getSharedSecret(ephemeralPriv, recipientPub);
 
-        // 3. Derive Key (SHA256 hash of shared secret, as per Rust impl)
-        // Rust: hasher.update(shared_secret); let derived = hasher.finalize();
         const derivedKeyBytes = sha256(sharedSecret);
 
-        // 4. Encrypt with AES-GCM
         const key = await crypto.subtle.importKey(
             "raw",
             derivedKeyBytes,
@@ -174,15 +151,10 @@ export class EncryptionService {
 
         const ciphertext = new Uint8Array(ciphertextBuffer);
 
-        // 5. Pack
         const combined = concatBytes(ephemeralPub, iv, ciphertext);
         return bytesToBase64(combined);
     }
 
-    /**
-     * Asymmetric Decryption
-     * Expects: [Ephemeral Public (32)][Nonce (12)][Ciphertext]
-     */
     static async decryptKey(privateKeyB64: string, encryptedDataB64: string): Promise<string> {
         const privKey = base64ToBytes(privateKeyB64);
         const combined = base64ToBytes(encryptedDataB64);
@@ -193,7 +165,6 @@ export class EncryptionService {
         const iv = combined.slice(32, 32 + 12);
         const ciphertext = combined.slice(32 + 12);
 
-        // 1. Shared Secret
         const sharedSecret = x25519.getSharedSecret(privKey, ephemeralPub);
 
         // 2. Derive Key
@@ -228,4 +199,76 @@ export class EncryptionService {
     static generateProjectKey(): string {
         return this.generateAesKey();
     }
+
+    /**
+     * Generate a CLI access token with derived cryptographic material
+     */
+    static async generateAccessToken(projectKeyB64: string): Promise<GeneratedAccessToken> {
+        const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+        const encoder = new TextEncoder();
+
+        // base64 URL encoding without padding
+        const encoded = bytesToBase64Url(tokenBytes);
+        const token = 'envie_' + encoded;
+        const tokenPrefix = encoded.substring(0, 3);
+
+        // Derive identity ID (16 bytes)
+        const identityIdBytes = hkdf(sha256, tokenBytes, undefined, encoder.encode('envie-identity-id'), 16);
+
+        // Hash identity ID for server storage
+        const identityIdHash = bytesToHex(sha256(identityIdBytes));
+
+        // Derive private key (32 bytes)
+        const privateKey = hkdf(sha256, tokenBytes, undefined, encoder.encode('envie-private-key'), 32);
+
+        // Derive public key
+        const publicKey = x25519.getPublicKey(privateKey);
+
+        // Encrypt project key to the token's public key
+        const encryptedProjectKey = await this.encryptKeyToPublicKey(publicKey, projectKeyB64);
+
+        return {
+            token,
+            tokenPrefix,
+            identityIdHash,
+            encryptedProjectKey,
+        };
+    }
+
+    private static async encryptKeyToPublicKey(publicKey: Uint8Array, keyB64: string): Promise<string> {
+        const payload = base64ToBytes(keyB64);
+        const encoder = new TextEncoder();
+
+        const ephemeralPriv = x25519.utils.randomSecretKey();
+        const ephemeralPub = x25519.getPublicKey(ephemeralPriv);
+
+        const sharedSecret = x25519.getSharedSecret(ephemeralPriv, publicKey);
+
+        // Derive AES key using HKDF (matching CLI's "envie-encrypt" info)
+        const derivedKey = hkdf(sha256, sharedSecret, undefined, encoder.encode('envie-encrypt'), 32);
+
+        const key = await crypto.subtle.importKey('raw', derivedKey, 'AES-GCM', false, ['encrypt']);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ciphertextBuffer = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload);
+        const ciphertext = new Uint8Array(ciphertextBuffer);
+
+        const combined = concatBytes(ephemeralPub, iv, ciphertext);
+        return bytesToBase64(combined);
+    }
+}
+
+export interface GeneratedAccessToken {
+    token: string;
+    tokenPrefix: string;
+    identityIdHash: string;
+    encryptedProjectKey: string;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+    const base64 = bytesToBase64(bytes);
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 }

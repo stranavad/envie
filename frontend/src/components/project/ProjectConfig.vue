@@ -17,7 +17,8 @@ import {
     Pencil,
     Trash2,
     FolderOpen,
-    Loader2
+    Loader2,
+    Wand2
 } from 'lucide-vue-next';
 import ConfigItemRow from './ConfigItemRow.vue';
 import SecretImportDialog from './SecretImportDialog.vue';
@@ -32,6 +33,7 @@ import { useConfigEncryption } from '@/composables/useConfigEncryption';
 import { copyEnvToClipboard, parseEnvString, type ParsedEnvItem } from '@/utils/env-format';
 import { IconButton } from '@/components/ui/icon-button';
 import { SortableContainer } from '@/components/ui/sortable';
+import { SectionHeader } from '@/components/ui/section-header';
 import { RefreshCw } from 'lucide-vue-next';
 
 const props = defineProps<{
@@ -111,6 +113,7 @@ const {
     onCategoryItemsChange,
     onUncategorizedChange,
     moveItemToCategory,
+    autoGroupByPrefix,
 } = useCategoryManagement(configItems);
 
 // Helper to compare nullable/undefined values
@@ -410,22 +413,20 @@ initialize();
             </div>
 
             <!-- Toolbar -->
-            <div class="flex items-center justify-between gap-4">
-                <div class="flex items-center gap-2 shrink-0">
-                    <h3 class="text-sm font-medium text-muted-foreground whitespace-nowrap">
-                        Config Items ({{ configItems.length }})
-                    </h3>
-                    <div v-if="hasChanges" class="flex items-center text-xs text-orange-500 font-medium whitespace-nowrap">
+            <SectionHeader :title="`Config Items (${configItems.length})`">
+                <template #actions>
+                    <div v-if="hasChanges" class="flex items-center text-xs text-orange-500 font-medium whitespace-nowrap mr-2">
                         <AlertTriangle class="w-3 h-3 mr-1" />
                         <span>Unsaved Changes</span>
                     </div>
-                </div>
-                <div class="flex items-center gap-1">
                     <IconButton tooltip="Add Item" @click="showAddItemDialog = true">
                         <Plus class="w-4 h-4" />
                     </IconButton>
                     <IconButton tooltip="Add Category" @click="showAddCategoryDialog = true">
                         <FolderPlus class="w-4 h-4" />
+                    </IconButton>
+                    <IconButton tooltip="Auto Group by Prefix" @click="autoGroupByPrefix">
+                        <Wand2 class="w-4 h-4" />
                     </IconButton>
                     <IconButton tooltip="Import .env" @click="showEnvImportDialog = true">
                         <FileUp class="w-4 h-4" />
@@ -440,6 +441,7 @@ initialize();
                     <Button
                         v-if="syncMode"
                         size="sm"
+                        variant="outline"
                         class="ml-2"
                         @click="handleSaveAndSync"
                         :disabled="isSaving || !decryptedKey || !hasChanges"
@@ -450,6 +452,7 @@ initialize();
                     <Button
                         v-else
                         size="sm"
+                        variant="outline"
                         class="ml-2"
                         @click="handleSave"
                         :disabled="isSaving || !decryptedKey || !hasChanges"
@@ -457,8 +460,8 @@ initialize();
                         <Save class="w-4 h-4 mr-2" />
                         {{ isSaving ? 'Saving...' : 'Save' }}
                     </Button>
-                </div>
-            </div>
+                </template>
+            </SectionHeader>
 
             <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
 

@@ -33,13 +33,7 @@ interface RequestOptions extends Omit<RequestInit, 'headers' | 'body'> {
     body?: BodyInit | null;
 }
 
-/**
- * API client with automatic token refresh
- */
 export const api = {
-    /**
-     * Make an authenticated request with automatic token refresh
-     */
     async fetch(endpoint: string, options: RequestOptions = {}): Promise<Response> {
         const authStore = useAuthStore();
 
@@ -57,8 +51,6 @@ export const api = {
             'Authorization': `Bearer ${token}`
         };
 
-        // Only set Content-Type for non-FormData requests
-        // Browser sets the correct Content-Type with boundary for FormData
         if (!isFormData) {
             headers['Content-Type'] = 'application/json';
         }
@@ -68,7 +60,6 @@ export const api = {
             headers
         });
 
-        // If we get 401, try one more refresh and retry
         if (response.status === 401) {
             const refreshSuccess = await authStore.refreshAccessToken();
             if (refreshSuccess) {
@@ -80,7 +71,6 @@ export const api = {
                     headers
                 });
             } else {
-                // Refresh failed, clear auth
                 await authStore.clearAuth();
                 throw new ApiError('Session expired', 401);
             }

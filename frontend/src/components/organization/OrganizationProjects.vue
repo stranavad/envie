@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
-import { Button } from '@/components/ui/button';
-import { Plus, Loader2 } from 'lucide-vue-next';
-import ProjectListItem, { type ProjectListItemData } from '@/components/project/ProjectListItem.vue';
+import { Plus } from 'lucide-vue-next';
+import { SectionHeader } from '@/components/ui/section-header';
+import { PageLoader } from '@/components/ui/spinner';
+import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
+import ProjectListItem from '@/components/project/ProjectListItem.vue';
 import CreateProjectDialog from '@/components/project/CreateProjectDialog.vue';
 import { useOrganizationStore } from '@/stores/organization';
-import { ProjectService } from '@/services/project.service';
+import { useOrganizationProjects, queryKeys } from '@/queries';
+import { useQueryClient } from '@tanstack/vue-query';
 
 export interface Team {
     id: string;
@@ -24,27 +28,12 @@ const emit = defineEmits<{
 
 const router = useRouter();
 const store = useOrganizationStore();
+const queryClient = useQueryClient();
 
-const projects = ref<ProjectListItemData[]>([]);
+// TanStack Query for organization projects
+const { data: projects, isLoading, error: queryError, refetch } = useOrganizationProjects(computed(() => props.organizationId));
+
 const isCreateProjectOpen = ref(false);
-const isLoading = ref(true);
-
-onMounted(async () => {
-    try {
-        await loadProjects();
-    } finally {
-        isLoading.value = false;
-    }
-});
-
-async function loadProjects() {
-    try {
-        const allProjects = await ProjectService.getProjects();
-        projects.value = allProjects.filter((p) => p.organizationId === props.organizationId);
-    } catch (e) {
-        console.error('Failed to load projects', e);
-    }
-}
 
 function openProject(id: string) {
     router.push(`/projects/${id}`);
@@ -56,32 +45,35 @@ async function handleCreateProject(payload: { name: string; teamId?: string }) {
     try {
         await store.createProject(props.organizationId, payload.teamId, payload.name);
         isCreateProjectOpen.value = false;
-        await loadProjects();
+        queryClient.invalidateQueries({ queryKey: queryKeys.organizationProjects(props.organizationId) });
         emit('project-created');
     } catch (e) {
         console.error('Failed to create project', e);
     }
 }
-
-defineExpose({ loadProjects });
 </script>
 
 <template>
     <div class="space-y-4">
-        <div class="flex justify-between items-center">
-            <h3 class="text-lg font-medium">Projects</h3>
-            <Button size="sm" @click="isCreateProjectOpen = true">
-                <Plus class="mr-2 h-4 w-4" />
-                New Project
-            </Button>
-        </div>
+        <SectionHeader
+            title="Projects"
+            action-label="New Project"
+            :action-icon="Plus"
+            @action="isCreateProjectOpen = true"
+        />
+
+        <!-- Error State -->
+        <ErrorState
+            v-if="queryError"
+            title="Failed to load projects"
+            :message="queryError instanceof Error ? queryError.message : String(queryError)"
+            :retry="refetch"
+        />
 
         <!-- Loading State -->
-        <div v-if="isLoading" class="flex items-center justify-center py-12">
-            <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
+        <PageLoader v-else-if="isLoading" message="Loading projects..." />
 
-        <div v-else-if="projects.length > 0" class="bg-card rounded-lg border shadow-sm">
+        <div v-else-if="projects && projects.length > 0" class="bg-card rounded-lg border shadow-sm">
             <div class="divide-y divide-border">
                 <ProjectListItem
                     v-for="project in projects"
@@ -92,9 +84,10 @@ defineExpose({ loadProjects });
             </div>
         </div>
 
-        <div v-else class="text-center py-8 text-muted-foreground border rounded-lg bg-muted/20">
-            No projects found in this organization.
-        </div>
+        <EmptyState
+            v-else-if="!isLoading && !queryError"
+            title="No projects found in this organization"
+        />
 
         <CreateProjectDialog
             v-model:open="isCreateProjectOpen"

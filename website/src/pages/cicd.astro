@@ -1,0 +1,14 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Navigation from '@/components/landing/Navigation.vue';
+import CICDPage from '@/components/landing/CICDPage.vue';
+import Footer from '@/components/landing/Footer.vue';
+---
+
+<Layout title="CI/CD Integration - Envie | Secrets for Your Pipelines">
+	<Navigation client:load />
+	<main>
+		<CICDPage client:load />
+	</main>
+	<Footer client:load />
+</Layout>

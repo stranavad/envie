@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import {Button} from '@/components/ui/button';
 import {ref, watch} from 'vue';
 import {type SecretManagerConfig, SecretManagerConfigService} from '@/services/secret-manager-config.service';
-import {Plus} from 'lucide-vue-next';
+import { SectionHeader } from '@/components/ui/section-header';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Plus, Cloud } from 'lucide-vue-next';
 import SecretManagerForm from '@/components/project/SecretManagerForm.vue';
 import SecretManagerRow from '@/components/project/SecretManagerRow.vue';
 import {Project} from "@/services/project.service.ts";
@@ -106,13 +107,13 @@ onCreated()
 
 <template>
     <div class="space-y-6">
-        <div class="flex justify-between items-center">
-            <h3 class="text-lg font-medium">Google Secret Manager</h3>
-            <Button v-if="!isAdding && !editingId" @click="startAdding" size="sm" variant="outline">
-                <Plus class="w-4 h-4 mr-2" />
-                Add Configuration
-            </Button>
-        </div>
+        <SectionHeader
+            title="Google Secret Manager"
+            description="Connect to external secret managers to sync and import secrets."
+            :action-label="!isAdding && !editingId ? 'Add Configuration' : undefined"
+            :action-icon="Plus"
+            @action="startAdding"
+        />
 
         <div v-if="error" class="p-4 text-sm text-destructive bg-destructive/15 rounded-md">
             {{ error }}
@@ -126,9 +127,12 @@ onCreated()
             @cancel="cancelAdding" 
         />
 
-        <div v-if="!isAdding && configs.length === 0" class="text-center py-10 text-muted-foreground border rounded-lg bg-background">
-            No Secret Manager configurations found.
-        </div>
+        <EmptyState
+            v-if="!isAdding && configs.length === 0"
+            :icon="Cloud"
+            title="No Secret Manager configurations found"
+            description="Add a configuration to sync secrets from Google Secret Manager."
+        />
 
         <div v-else class="grid gap-4 md:grid-cols-1">
             <template v-for="config in configs" :key="config.id">

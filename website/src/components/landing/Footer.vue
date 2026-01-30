@@ -25,7 +25,9 @@ const githubUrl = 'https://github.com/stranavad/envie'
             <h4 class="font-semibold mb-4">Product</h4>
             <ul class="space-y-2.5 text-sm text-muted-foreground">
                 <li><a href="/features" class="hover:text-foreground transition-colors">Features</a></li>
+                <li><a href="/cicd" class="hover:text-foreground transition-colors">CI/CD</a></li>
                 <li><a href="/security" class="hover:text-foreground transition-colors">Security</a></li>
+                <li><a href="/download" class="hover:text-foreground transition-colors">Download</a></li>
             </ul>
         </div>
         <div>

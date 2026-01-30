@@ -6,7 +6,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { KeyRound, FolderLock, Users, RefreshCw, Cloud, ArrowRight, HardDrive } from 'lucide-vue-next'
+import { KeyRound, FolderLock, Users, RefreshCw, Cloud, ArrowRight, HardDrive, GitCompare } from 'lucide-vue-next'
 
 const features = [
   {
@@ -20,9 +20,9 @@ const features = [
     icon: HardDrive,
   },
   {
-    title: 'Encrypted File Sharing',
-    description: 'Share sensitive files like .env, credentials, and certificates securely within your team.',
-    icon: FolderLock,
+    title: 'Project Diff & Compare',
+    description: 'Compare configurations between projects with a visual diff. Accept, ignore, or keep changes individually or in bulk.',
+    icon: GitCompare,
   },
   {
     title: 'Teams & Collaboration',
@@ -35,18 +35,20 @@ const features = [
     icon: RefreshCw,
   },
   {
-    title: 'Google Secret Manager',
-    description: 'Optional integration with Google Cloud. Pull secrets directly - your GCP credentials never touch our servers.',
+    title: 'CI/CD Integration',
+    description: 'Inject secrets into your CI/CD pipeline with access tokens. Keep your hosting provider away from your secrets.',
     icon: Cloud,
   },
 ]
 </script>
 
 <template>
-  <section id="features" class="py-24 bg-secondary/20">
+  <section id="features" class="py-24 relative">
     <div class="container mx-auto px-4">
       <div class="text-center mb-16">
-        <p class="text-primary font-medium mb-3">Features</p>
+        <div class="inline-flex items-center rounded-full bg-primary/10 px-4 py-1.5 text-sm font-medium text-primary border border-primary/20 mb-4">
+          Features
+        </div>
         <h2 class="text-3xl md:text-5xl font-bold mb-4">Everything you need for secret management</h2>
         <p class="text-muted-foreground text-lg max-w-2xl mx-auto">
           Built for teams who refuse to compromise on security.

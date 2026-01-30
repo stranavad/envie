@@ -33,12 +33,23 @@ import {
   Server,
   HardDrive,
   Link2,
-  RefreshCcw
+  RefreshCcw,
+  GitCompare,
+  ArrowRightLeft,
+  Check,
+  X,
+  Plus,
+  Minus
 } from 'lucide-vue-next'
 
 const githubUrl = 'https://github.com/stranavad/envie'
 
 const additionalFeatures = [
+  {
+    title: 'Project Cloning',
+    description: 'Clone projects to new teams with selective config copying. Choose which values to include or leave empty for sensitive secrets.',
+    icon: Copy,
+  },
   {
     title: 'Team Collaboration',
     description: 'Work together with your team on shared secrets. Each member has their own encryption keys for maximum security.',
@@ -63,11 +74,6 @@ const additionalFeatures = [
     title: 'Zero-Trust Security',
     description: 'Built on zero-trust principles. The server never sees your unencrypted data.',
     icon: Shield,
-  },
-  {
-    title: 'Project Hierarchy',
-    description: 'Organize projects within teams. Share secrets across projects or keep them isolated.',
-    icon: Layers,
   },
 ]
 
@@ -572,6 +578,141 @@ const mockFiles = [
                     Your GCP credentials never touch Envie servers
                   </p>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Project Diff & Compare Feature -->
+      <div class="grid lg:grid-cols-2 gap-12 items-center mb-20">
+        <div>
+          <div class="inline-flex items-center rounded-full bg-violet-500/10 px-4 py-1.5 text-sm font-medium text-violet-400 border border-violet-500/20 mb-4">
+            <GitCompare class="mr-2 size-4" />
+            Compare & Merge
+          </div>
+          <h2 class="text-3xl font-bold mb-4">Project Diff & Compare</h2>
+          <p class="text-lg text-muted-foreground mb-6 leading-relaxed">
+            Compare configurations between any two projects in your organization. See what's changed, what's been added or removed, and selectively apply changes with a visual diff interface.
+          </p>
+          <ul class="space-y-3">
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-violet-500"></div>
+              Visual diff with status indicators
+            </li>
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-violet-500"></div>
+              Per-item actions (Accept, Keep, Delete)
+            </li>
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-violet-500"></div>
+              Bulk actions for quick merging
+            </li>
+            <li class="flex items-center gap-3 text-muted-foreground">
+              <div class="size-1.5 rounded-full bg-violet-500"></div>
+              Swap direction to compare both ways
+            </li>
+          </ul>
+        </div>
+        <div>
+          <!-- Project Diff Illustration -->
+          <div class="relative">
+            <div class="absolute inset-0 bg-gradient-to-br from-violet-500/20 to-transparent blur-3xl rounded-full -z-10"></div>
+            <div class="bg-card border border-border/50 rounded-xl shadow-2xl overflow-hidden">
+              <!-- Header -->
+              <div class="bg-secondary/50 border-b border-border/50 px-4 py-3">
+                <div class="flex items-center justify-between mb-3">
+                  <div class="flex items-center gap-2">
+                    <GitCompare class="size-4 text-violet-500" />
+                    <span class="font-medium text-sm">Compare Projects</span>
+                  </div>
+                  <button class="p-1.5 hover:bg-secondary rounded transition-colors text-muted-foreground">
+                    <ArrowRightLeft class="size-4" />
+                  </button>
+                </div>
+                <div class="flex items-center gap-3 text-xs">
+                  <div class="flex-1 px-3 py-2 bg-secondary/80 rounded border border-border/50">
+                    <span class="text-muted-foreground">Base:</span>
+                    <span class="ml-1.5 font-medium">api-staging</span>
+                  </div>
+                  <ArrowRight class="size-4 text-muted-foreground" />
+                  <div class="flex-1 px-3 py-2 bg-secondary/80 rounded border border-border/50">
+                    <span class="text-muted-foreground">Target:</span>
+                    <span class="ml-1.5 font-medium">api-production</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Diff Items -->
+              <div class="divide-y divide-border/50">
+                <!-- Changed -->
+                <div class="px-4 py-3 flex items-center justify-between">
+                  <div class="flex items-center gap-3">
+                    <div class="size-2 rounded-full bg-orange-500"></div>
+                    <span class="font-mono text-sm">DATABASE_URL</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-muted-foreground">changed</span>
+                    <button class="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors">
+                      Accept
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Added -->
+                <div class="px-4 py-3 flex items-center justify-between">
+                  <div class="flex items-center gap-3">
+                    <div class="size-2 rounded-full bg-green-500"></div>
+                    <span class="font-mono text-sm">NEW_RELIC_KEY</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-muted-foreground">added</span>
+                    <button class="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors">
+                      Accept
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Removed -->
+                <div class="px-4 py-3 flex items-center justify-between">
+                  <div class="flex items-center gap-3">
+                    <div class="size-2 rounded-full bg-red-500"></div>
+                    <span class="font-mono text-sm">DEBUG_MODE</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-muted-foreground">removed</span>
+                    <button class="px-2 py-1 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors">
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Unchanged -->
+                <div class="px-4 py-3 flex items-center justify-between opacity-60">
+                  <div class="flex items-center gap-3">
+                    <div class="size-2 rounded-full bg-muted-foreground/30"></div>
+                    <span class="font-mono text-sm">API_VERSION</span>
+                  </div>
+                  <span class="text-xs text-muted-foreground">unchanged</span>
+                </div>
+              </div>
+
+              <!-- Footer with bulk actions -->
+              <div class="bg-secondary/30 border-t border-border/50 px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span class="flex items-center gap-1">
+                    <div class="size-1.5 rounded-full bg-orange-500"></div> 1 changed
+                  </span>
+                  <span class="flex items-center gap-1">
+                    <div class="size-1.5 rounded-full bg-green-500"></div> 1 added
+                  </span>
+                  <span class="flex items-center gap-1">
+                    <div class="size-1.5 rounded-full bg-red-500"></div> 1 removed
+                  </span>
+                </div>
+                <button class="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors font-medium">
+                  Apply Changes
+                </button>
               </div>
             </div>
           </div>

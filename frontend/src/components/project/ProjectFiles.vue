@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,20 +11,29 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { Upload, Download, Trash2, File, Loader2, AlertCircle, Check } from 'lucide-vue-next';
+import { SectionHeader } from '@/components/ui/section-header';
+import { Upload, Download, Trash2, File, Loader2, Check } from 'lucide-vue-next';
+import { PageLoader } from '@/components/ui/spinner';
+import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ProjectService, type ProjectDetail, type ProjectFile } from '@/services/project.service';
 import { EncryptionService } from '@/services/encryption.service';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { useProjectFiles, queryKeys } from '@/queries';
+import { useQueryClient } from '@tanstack/vue-query';
 
 const props = defineProps<{
     project: ProjectDetail;
     projectKey: string;
 }>();
 
-const files = ref<ProjectFile[]>([]);
-const isLoading = ref(false);
-const error = ref('');
+const queryClient = useQueryClient();
+
+// TanStack Query for files
+const { data: files, isLoading, error: queryError, refetch } = useProjectFiles(computed(() => props.project.id));
+
+const localError = ref('');
 
 // Upload state
 const isUploadOpen = ref(false);
@@ -39,22 +48,12 @@ const downloadSuccess = ref('');
 
 const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB
 
-onMounted(() => {
-    loadFiles();
-});
-
-async function loadFiles() {
-    isLoading.value = true;
-    error.value = '';
-    try {
-        files.value = await ProjectService.getFiles(props.project.id);
-    } catch (e: any) {
-        console.error('Failed to load files', e);
-        error.value = e.message || 'Failed to load files';
-    } finally {
-        isLoading.value = false;
+const errorMessage = computed(() => {
+    if (queryError.value) {
+        return queryError.value instanceof Error ? queryError.value.message : String(queryError.value);
     }
-}
+    return localError.value;
+});
 
 function formatFileSize(bytes: number): string {
     if (bytes < 1024) return bytes + ' B';
@@ -134,7 +133,7 @@ async function handleUpload() {
         uploadProgress.value = 'Done!';
         isUploadOpen.value = false;
         uploadFile.value = null;
-        await loadFiles();
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectFiles(props.project.id) });
 
     } catch (e: any) {
         console.error('Upload failed', e);
@@ -197,7 +196,7 @@ async function handleDownload(file: ProjectFile) {
 
     } catch (e: any) {
         console.error('Download failed', e);
-        error.value = e.message || 'Download failed';
+        localError.value = e.message || 'Download failed';
     } finally {
         downloadingFileId.value = null;
     }
@@ -206,10 +205,10 @@ async function handleDownload(file: ProjectFile) {
 async function handleDelete(file: ProjectFile) {
     try {
         await ProjectService.deleteFile(props.project.id, file.id);
-        await loadFiles();
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectFiles(props.project.id) });
     } catch (e: any) {
         console.error('Delete failed', e);
-        alert(e.message || 'Delete failed');
+        localError.value = e.message || 'Delete failed';
     }
 }
 
@@ -270,38 +269,34 @@ async function calculateChecksum(data: Uint8Array): Promise<string> {
 
 <template>
     <div class="space-y-6">
-        <div v-if="error" class="bg-destructive/15 text-destructive p-4 rounded-md flex items-center gap-2">
-            <AlertCircle class="w-4 h-4" />
-            {{ error }}
-        </div>
-
         <div v-if="downloadSuccess" class="bg-green-500/15 text-green-700 p-4 rounded-md flex items-center gap-2">
             <Check class="w-4 h-4" />
             {{ downloadSuccess }}
         </div>
 
         <!-- Header -->
-        <div class="flex justify-between items-center">
-            <div>
-                <h3 class="text-lg font-medium">Files</h3>
-                <p class="text-sm text-muted-foreground">
-                    Encrypted files shared with project members. Max 1MB per file.
-                </p>
-            </div>
-            <Button v-if="project.canEdit" @click="isUploadOpen = true">
-                <Upload class="w-4 h-4 mr-2" />
-                Upload File
-            </Button>
-        </div>
+        <SectionHeader
+            title="Files"
+            description="Encrypted files shared with project members. Max 1MB per file."
+            action-label="Upload File"
+            :action-icon="Upload"
+            :action-disabled="!project.canEdit"
+            @action="isUploadOpen = true"
+        />
+
+        <!-- Error state -->
+        <ErrorState
+            v-if="errorMessage"
+            title="Failed to load files"
+            :message="errorMessage"
+            :retry="() => { localError = ''; refetch(); }"
+        />
 
         <!-- Loading state -->
-        <div v-if="isLoading" class="flex flex-col items-center py-12 text-muted-foreground">
-            <Loader2 class="h-8 w-8 animate-spin mb-4" />
-            <p>Loading files...</p>
-        </div>
+        <PageLoader v-else-if="isLoading" message="Loading files..." />
 
         <!-- Files list -->
-        <div v-else-if="files.length > 0" class="bg-card rounded-lg border shadow-sm">
+        <div v-else-if="files && files.length > 0" class="bg-card rounded-lg border shadow-sm">
             <div class="divide-y divide-border">
                 <div
                     v-for="file in files"
@@ -348,11 +343,12 @@ async function calculateChecksum(data: Uint8Array): Promise<string> {
         </div>
 
         <!-- Empty state -->
-        <div v-else class="text-center py-8 text-muted-foreground border rounded-lg bg-muted/20">
-            <File class="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>No files uploaded yet.</p>
-            <p class="text-sm mt-1">Upload files to share with project members.</p>
-        </div>
+        <EmptyState
+            v-else
+            :icon="File"
+            title="No files uploaded yet"
+            description="Upload files to share with project members."
+        />
 
         <!-- Upload Dialog -->
         <Dialog v-model:open="isUploadOpen">

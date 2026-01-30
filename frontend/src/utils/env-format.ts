@@ -115,13 +115,25 @@ export interface ParsedEnvItem {
 }
 
 /**
+ * Unescape a value that was read from a .env file.
+ * The dotenv library preserves escape sequences, so we need to unescape them.
+ */
+function unescapeEnvValue(val: string): string {
+    return val
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+}
+
+/**
  * Parse .env format string into key-value pairs.
- * Uses dotenv library for proper multiline value support.
+ * Uses dotenv library for parsing, then unescapes values.
  */
 export function parseEnvString(input: string): ParsedEnvItem[] {
     const parsed = parseDotenv(input);
     return Object.entries(parsed).map(([name, value]) => ({
         name,
-        value: value ?? '',
+        value: unescapeEnvValue(value ?? ''),
     }));
 }

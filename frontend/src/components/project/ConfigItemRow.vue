@@ -4,7 +4,11 @@ import {Button} from '@/components/ui/button';
 import {Switch} from '@/components/ui/switch';
 import {Label} from '@/components/ui/label';
 import {Textarea} from '@/components/ui/textarea';
+import {Input} from '@/components/ui/input';
+import {Calendar} from '@/components/ui/calendar';
 import {
+  AlertCircle,
+  Calendar as CalendarIcon,
   Check,
   ChevronsUpDown,
   ClipboardCheck,
@@ -17,7 +21,8 @@ import {
   Settings,
   Trash2
 } from 'lucide-vue-next';
-import {ref, watch} from 'vue';
+import {ref, watch, computed} from 'vue';
+import { type DateValue, getLocalTimeZone, parseDate } from '@internationalized/date';
 
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from '@/components/ui/select'
 import {Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,} from '@/components/ui/command'
@@ -44,6 +49,19 @@ const expanded = ref(false)
 const show = ref(!props.modelValue.sensitive)
 const showCopiedToast = ref(false)
 
+// Expiry date state (using any to work around reka-ui type quirks)
+const expiresAtValue = ref<any>(
+    props.modelValue.expiresAt
+        ? parseDate(props.modelValue.expiresAt.split('T')[0])
+        : undefined
+);
+
+// Check if expired
+const isExpired = computed(() => {
+    if (!props.modelValue.expiresAt) return false;
+    return new Date(props.modelValue.expiresAt) < new Date();
+});
+
 // Secret Manager - use composable
 const secretManager = useSecretManager(props.modelValue.projectId, props.decryptedKey);
 const selectedProviderId = ref<string>('');
@@ -54,6 +72,10 @@ const openCombobox = ref(false)
 watch(() => props.modelValue.secretManagerName, (val) => {
     isSecretLinked.value = !!val;
     if (val) selectedSecretName.value = val;
+});
+
+watch(() => props.modelValue.expiresAt, (val: string | undefined) => {
+    expiresAtValue.value = val ? parseDate(val.split('T')[0]) : undefined;
 });
 
 watch(expanded, async (val) => {
@@ -129,6 +151,20 @@ function onValueInput(val: string | undefined) {
     emit('update:modelValue', newItem);
 }
 
+function updateDescription(val: string | number | undefined) {
+    const newItem = { ...props.modelValue, description: val ? String(val) : undefined };
+    emit('update:modelValue', newItem);
+}
+
+function updateExpiresAt(val: any) {
+    expiresAtValue.value = val;
+    const newItem = {
+        ...props.modelValue,
+        expiresAt: val ? (val as DateValue).toDate(getLocalTimeZone()).toISOString() : undefined
+    };
+    emit('update:modelValue', newItem);
+}
+
 
 function copyToClipboard() {
     navigator.clipboard.writeText(props.modelValue.value);
@@ -162,6 +198,11 @@ function copyToClipboard() {
             <div class="w-1/3 min-w-[150px] flex items-center gap-2">
                  <LinkIcon v-if="modelValue.secretManagerName" class="w-3 h-3 text-blue-500" title="Linked to Secret Manager" />
                 <p class="font-mono text-sm font-medium truncate" :title="modelValue.name">{{ modelValue.name }}</p>
+                <AlertCircle
+                    v-if="isExpired"
+                    class="w-3 h-3 text-red-500 shrink-0"
+                    title="Expired"
+                />
             </div>
 
             <!-- Value Preview (Clickable to Copy) -->
@@ -240,6 +281,59 @@ function copyToClipboard() {
                 <p v-if="modelValue.secretManagerName" class="text-xs text-muted-foreground">
                     Value is managed by Secret Manager. Disable sync to edit manually.
                 </p>
+            </div>
+
+            <!-- Description -->
+            <div class="space-y-2">
+                <Label class="text-sm">Description</Label>
+                <Input
+                    :model-value="modelValue.description || ''"
+                    @update:model-value="updateDescription"
+                    placeholder="Optional description for this config item..."
+                />
+                <p class="text-xs text-muted-foreground">
+                    Add notes about what this config is used for.
+                </p>
+            </div>
+
+            <!-- Expiry Date -->
+            <div class="flex items-center justify-between pt-4 border-t border-border/50">
+                <div class="space-y-0.5">
+                    <Label class="text-sm flex items-center gap-2">
+                        <CalendarIcon class="w-4 h-4" />
+                        Expiry Date
+                    </Label>
+                    <p class="text-xs text-muted-foreground">
+                        Set a reminder when this value should be rotated.
+                    </p>
+                </div>
+                <Popover>
+                    <PopoverTrigger as-child>
+                        <Button
+                            variant="outline"
+                            class="w-[180px] justify-start text-left font-normal"
+                            :class="{ 'text-muted-foreground': !expiresAtValue, 'border-red-500 text-red-500': isExpired }"
+                        >
+                            <CalendarIcon class="mr-2 h-4 w-4" />
+                            {{ expiresAtValue
+                                ? expiresAtValue.toDate(getLocalTimeZone()).toLocaleDateString()
+                                : 'No expiry' }}
+                        </Button>
+                    </PopoverTrigger>
+                    <PopoverContent class="w-auto p-0" align="end">
+                        <Calendar :model-value="expiresAtValue" @update:model-value="updateExpiresAt" />
+                        <div class="p-2 border-t">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                class="w-full"
+                                @click="updateExpiresAt(undefined)"
+                            >
+                                Clear
+                            </Button>
+                        </div>
+                    </PopoverContent>
+                </Popover>
             </div>
 
             <!-- Secret Manager Link -->

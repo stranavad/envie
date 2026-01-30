@@ -19,6 +19,11 @@ export interface UpdateDeviceRequest {
     encryptedMasterKey?: string;
 }
 
+export interface RegisterWaitingDeviceRequest {
+    name: string;
+    publicKey: string;
+}
+
 export class DeviceService {
     static async getDevices(): Promise<Device[]> {
         return api.get<Device[]>('/devices');

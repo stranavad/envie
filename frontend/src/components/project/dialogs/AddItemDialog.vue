@@ -98,7 +98,7 @@ function handleAdd() {
                     </select>
                 </div>
                 <div class="flex items-center space-x-2">
-                    <Switch id="itemSensitive" v-model:checked="newItem.sensitive" />
+                    <Switch id="itemSensitive" v-model="newItem.sensitive" />
                     <Label for="itemSensitive">Mark as sensitive</Label>
                 </div>
             </div>

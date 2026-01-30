@@ -1,4 +1,16 @@
 import { api } from './api';
+import {Team} from "@/services/team.service.ts";
+
+export interface ProjectShort {
+    id: string;
+    name: string;
+    organizationId: string;
+    organizationName: string;
+    keyVersion: number;
+    configChecksum?: string;
+    createdAt: string;
+    updatedAt: string;
+}
 
 export interface Project {
     id: string;
@@ -58,8 +70,6 @@ export interface TeamUser {
 export interface TeamWithUsers {
     id: string;
     name: string;
-    memberCount: number;
-    projectCount: number;
     users: TeamUser[];
 }
 
@@ -74,7 +84,7 @@ export interface OrgUser {
 export interface ProjectAccessData {
     teams: TeamWithUsers[];
     organizationAdmins: OrgUser[];
-    availableTeams: TeamWithUsers[];
+    availableTeams: Team[];
 }
 
 export interface AddTeamToProjectRequest {
@@ -119,9 +129,32 @@ export interface FileFEK {
     encryptedFek: string;
 }
 
+export interface ProjectToken {
+    id: string;
+    name: string;
+    tokenPrefix: string;
+    expiresAt: string;
+    lastUsedAt?: string;
+    createdBy: string;
+    creatorName: string;
+    createdAt: string;
+}
+
+export interface CreateProjectTokenRequest {
+    name: string;
+    expiresAt: string;
+    tokenPrefix: string;
+    identityIdHash: string;
+    encryptedProjectKey: string;
+}
+
 export class ProjectService {
-    static async getProjects(): Promise<Project[]> {
-        return api.get<Project[]>('/projects');
+    static async getProjects(): Promise<ProjectShort[]> {
+        return api.get<ProjectShort[]>('/projects');
+    }
+
+    static async getOrganizationProjects(organizationId: string): Promise<ProjectShort[]> {
+        return api.get<ProjectShort[]>(`/projects/organization/${organizationId}`)
     }
 
     static async getProject(id: string): Promise<ProjectDetail> {
@@ -183,6 +216,18 @@ export class ProjectService {
     static async getFilesForRotation(projectId: string): Promise<FileFEK[]> {
         return api.get<FileFEK[]>(`/projects/${projectId}/files-feks`);
     }
+
+    static async getTokens(projectId: string): Promise<ProjectToken[]> {
+        return api.get<ProjectToken[]>(`/projects/${projectId}/tokens`);
+    }
+
+    static async createToken(projectId: string, request: CreateProjectTokenRequest): Promise<void> {
+        await api.post(`/projects/${projectId}/tokens`, request);
+    }
+
+    static async deleteToken(projectId: string, tokenId: string): Promise<void> {
+        await api.delete(`/projects/${projectId}/tokens/${tokenId}`);
+    }
 }
 
 export interface ConfigItem {
@@ -193,6 +238,8 @@ export interface ConfigItem {
     sensitive: boolean;
     position: number;
     category?: string;
+    description?: string;
+    expiresAt?: string;
     createdAt?: string;
     updatedAt?: string;
 

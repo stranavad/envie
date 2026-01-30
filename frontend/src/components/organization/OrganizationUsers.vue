@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { SectionHeader } from '@/components/ui/section-header';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
     Select,
     SelectContent,
@@ -17,7 +19,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { Trash2, Loader2 } from 'lucide-vue-next';
+import { Trash2, Loader2, UserPlus, Users } from 'lucide-vue-next';
+import AddOrganizationMemberDialog from './dialogs/AddOrganizationMemberDialog.vue';
 import { OrganizationService } from '@/services/organization.service';
 import { EncryptionService } from '@/services/encryption.service';
 import { useOrganizationStore } from '@/stores/organization';
@@ -51,6 +54,9 @@ const removingUserId = ref<string | null>(null);
 const showRemoveDialog = ref(false);
 const userToRemove = ref<OrgUser | null>(null);
 const error = ref('');
+const isAddMemberOpen = ref(false);
+
+const currentMemberIds = computed(() => props.users.map(u => u.id));
 
 async function handleRoleChange(user: OrgUser, newRole: string) {
     if (user.role === newRole) return;
@@ -118,11 +124,20 @@ async function handleRemove() {
 function isCurrentUser(userId: string): boolean {
     return authStore.user?.id === userId;
 }
+
+function handleMemberAdded() {
+    emit('users-updated');
+}
 </script>
 
 <template>
     <div class="space-y-4">
-        <h3 class="text-lg font-medium">Users</h3>
+        <SectionHeader
+            title="Users"
+            :action-label="canEdit ? 'Invite Member' : undefined"
+            :action-icon="UserPlus"
+            @action="isAddMemberOpen = true"
+        />
 
         <div v-if="error" class="text-sm text-destructive p-3 bg-destructive/10 rounded-md">
             {{ error }}
@@ -186,9 +201,11 @@ function isCurrentUser(userId: string): boolean {
             </div>
         </div>
 
-        <div v-else class="p-8 text-center text-muted-foreground border rounded-lg bg-muted/20">
-            No users loaded.
-        </div>
+        <EmptyState
+            v-else
+            :icon="Users"
+            title="No users loaded"
+        />
 
         <!-- Remove Confirmation Dialog -->
         <Dialog v-model:open="showRemoveDialog">
@@ -211,5 +228,12 @@ function isCurrentUser(userId: string): boolean {
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+
+        <AddOrganizationMemberDialog
+            v-model:open="isAddMemberOpen"
+            :organization-id="organizationId"
+            :current-member-ids="currentMemberIds"
+            @member-added="handleMemberAdded"
+        />
     </div>
 </template>

@@ -1,17 +1,15 @@
 <script setup lang="ts">
 import {computed, onMounted, onUnmounted, ref} from 'vue';
-import {useAuthStore} from '@/stores/auth';
 import {useVaultStore} from '@/stores/vault';
 import {IdentityService} from '@/services/identity.service';
 import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle} from '@/components/ui/card';
 import {Input} from '@/components/ui/input';
 import {Label} from '@/components/ui/label';
-import {config} from '@/config';
 import {Check, Copy, KeyRound, Loader2, Monitor, ShieldCheck, Smartphone, Trash2} from 'lucide-vue-next';
 import {EncryptionService} from '@/services/encryption.service';
+import {DeviceService} from "@/services/device.service.ts";
 
-const auth = useAuthStore();
 const vault = useVaultStore();
 
 type Step = 'check' | 'options' | 'generate' | 'recover' | 'waiting_approval' | 'registering';
@@ -29,7 +27,6 @@ let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
 const emit = defineEmits(['completed']);
 
-// ============ CASE A: Request Approval from Another Device ============
 async function startWaitingForApproval() {
     if (!vault.publicKey) {
         error.value = "Device public key not found. Is vault unlocked?";
@@ -40,25 +37,11 @@ async function startWaitingForApproval() {
     error.value = '';
 
     try {
-        // Register device as pending (without encryptedMasterKey)
-        const response = await fetch(`${config.backendUrl}/devices`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${auth.token}`
-            },
-            body: JSON.stringify({
-                name: deviceName.value,
-                publicKey: vault.publicKey
-                // No encryptedMasterKey = pending approval
-            })
-        });
+        await DeviceService.registerDevice({
+          name: deviceName.value,
+          publicKey: vault.publicKey
+        })
 
-        if (!response.ok) {
-            throw new Error("Failed to register device");
-        }
-
-        // Start polling for approval
         currentStep.value = 'waiting_approval';
         startPolling();
 
@@ -83,21 +66,14 @@ function stopPolling() {
 
 async function checkApprovalStatus() {
     try {
-        const res = await fetch(`${config.backendUrl}/devices`, {
-            headers: { 'Authorization': `Bearer ${auth.token}` }
-        });
+        const devices = await DeviceService.getDevices()
+        const currentDevices = devices.find((d: any) => d.publicKey === vault.publicKey);
 
-        if (!res.ok) return;
-
-        const devices = await res.json();
-        const myDevice = devices.find((d: any) => d.publicKey === vault.publicKey);
-
-        if (myDevice?.encryptedMasterKey) {
-            // We've been approved!
+        if (currentDevices?.encryptedMasterKey) {
             stopPolling();
 
             try {
-                let bundle = myDevice.encryptedMasterKey;
+                let bundle = currentDevices.encryptedMasterKey;
                 if (bundle.startsWith('"')) {
                     bundle = JSON.parse(bundle);
                 }
@@ -116,7 +92,6 @@ async function checkApprovalStatus() {
     }
 }
 
-// ============ CASE B: Recover with Recovery Phrase ============
 function startRecover() {
     enteredMnemonic.value = '';
     error.value = '';
@@ -149,17 +124,8 @@ async function startDestructiveReset() {
     error.value = '';
 
     try {
-        // Delete all existing devices
-        const deleteRes = await fetch(`${config.backendUrl}/devices`, {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${auth.token}` }
-        });
+        await DeviceService.deleteAllDevices()
 
-        if (!deleteRes.ok) {
-            throw new Error("Failed to delete existing devices");
-        }
-
-        // Generate new identity
         mnemonic.value = IdentityService.generateRecoveryPhrase();
         currentStep.value = 'generate';
 
@@ -170,7 +136,6 @@ async function startDestructiveReset() {
     }
 }
 
-// ============ New Account: Generate New Identity ============
 function startGenerate() {
     mnemonic.value = IdentityService.generateRecoveryPhrase();
     error.value = '';
@@ -202,69 +167,54 @@ async function registerDevice(masterKey: string) {
 
     const encryptedMasterKeyBundle = await EncryptionService.encryptKey(vault.publicKey, masterKey);
 
-    const response = await fetch(`${config.backendUrl}/devices`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${auth.token}`
-        },
-        body: JSON.stringify({
-            name: deviceName.value,
-            publicKey: vault.publicKey,
-            encryptedMasterKey: encryptedMasterKeyBundle
-        })
-    });
+    await DeviceService.registerDevice({
+      name: deviceName.value,
+      publicKey: vault.publicKey,
+      encryptedMasterKey: encryptedMasterKeyBundle
+    })
 
-    if (!response.ok) {
-        throw new Error("Failed to register device");
-    }
+
 
     IdentityService.setMasterKey(masterKey);
     await vault.saveMasterKey(masterKey);
     emit('completed');
 }
 
-// ============ Initial Check ============
 async function checkStatus() {
     try {
-        const res = await fetch(`${config.backendUrl}/devices`, {
-            headers: { 'Authorization': `Bearer ${auth.token}` }
-        });
+        const devices = await DeviceService.getDevices();
 
-        if (res.ok) {
-            const devices = await res.json();
 
-            if (devices && devices.length > 0) {
-                hasExistingDevices.value = true;
-            }
+        if (devices && devices.length > 0) {
+            hasExistingDevices.value = true;
+        }
 
-            const myDevice = devices.find((d: any) => d.publicKey === vault.publicKey);
+        const currentDevice = devices.find((d: any) => d.publicKey === vault.publicKey);
 
-            if (myDevice) {
-                if (myDevice.encryptedMasterKey) {
-                    // Already approved - decrypt and continue
-                    try {
-                        let bundle = myDevice.encryptedMasterKey;
-                        if (bundle.startsWith('"')) {
-                            bundle = JSON.parse(bundle);
-                        }
+        if(!currentDevice){
+          currentStep.value = 'options';
+          return;
+        }
 
-                        const masterKey = await EncryptionService.decryptKey(vault.privateKey, bundle);
-                        IdentityService.setMasterKey(masterKey);
-                        await vault.saveMasterKey(masterKey);
-                        emit('completed');
-                        return;
-                    } catch (e) {
-                        console.error("Failed to decrypt master key", e);
-                        error.value = "Failed to unlock identity. You may need to re-verify.";
-                    }
-                } else {
-                    // Device registered but pending approval - resume waiting
-                    currentStep.value = 'waiting_approval';
-                    startPolling();
-                    return;
-                }
-            }
+        if(!currentDevice.encryptedMasterKey) {
+          currentStep.value = 'waiting_approval';
+          startPolling();
+          return;
+        }
+
+        try {
+          let bundle = currentDevice.encryptedMasterKey;
+          if (bundle.startsWith('"')) {
+            bundle = JSON.parse(bundle);
+          }
+
+          const masterKey = await EncryptionService.decryptKey(vault.privateKey, bundle);
+          IdentityService.setMasterKey(masterKey);
+          await vault.saveMasterKey(masterKey);
+          emit('completed');
+          return;
+        } catch (e) {
+          error.value = "Failed to unlock identity. You may need to re-verify.";
         }
     } catch (e) {
         console.error("Check status failed", e);
@@ -273,7 +223,6 @@ async function checkStatus() {
     currentStep.value = 'options';
 }
 
-// ============ Lifecycle ============
 onMounted(() => {
     checkStatus();
 });
@@ -282,7 +231,6 @@ onUnmounted(() => {
     stopPolling();
 });
 
-// Clipboard
 const copied = ref(false);
 function copyToClipboard() {
     navigator.clipboard.writeText(mnemonic.value);
@@ -310,7 +258,6 @@ function cancelWaiting() {
             </CardHeader>
 
             <CardContent>
-                <!-- Loading / Check -->
                 <div v-if="currentStep === 'check' || currentStep === 'registering'" class="flex flex-col items-center py-8">
                     <Loader2 class="h-8 w-8 animate-spin mb-4" />
                     <p class="text-muted-foreground">{{ currentStep === 'registering' ? 'Registering device...' : 'Checking registration...' }}</p>

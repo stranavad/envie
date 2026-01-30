@@ -1,31 +1,37 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { type Project, ProjectService } from '@/services/project.service';
+import { ProjectService, type ProjectShort } from '@/services/project.service';
 import { KeyRotationService, type PendingRotationWithProject } from '@/services/key-rotation.service';
 import { FileMappingService, type SyncStatus } from '@/services/file-mapping.service';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Building2, ArrowRight, KeyRound, AlertTriangle, Loader2 } from 'lucide-vue-next';
+import { Building2, ArrowRight, KeyRound, AlertTriangle } from 'lucide-vue-next';
+import { PageLoader } from '@/components/ui/spinner';
+import { ErrorState } from '@/components/ui/error-state';
 import ProjectListItem from '@/components/project/ProjectListItem.vue';
 import { useProjectDecryption } from '@/composables/useProjectDecryption';
 import { useFileSync } from '@/composables/useFileSync';
+import { useProjects } from '@/queries';
 
 const router = useRouter();
 const { decryptProjectKeys } = useProjectDecryption();
 const { pullToLocal } = useFileSync();
-const projects = ref<Project[]>([]);
+
+// TanStack Query for projects
+const { data: projects, isLoading, error: queryError, refetch } = useProjects();
+
 const pendingRotations = ref<PendingRotationWithProject[]>([]);
 const syncStatusMap = ref<Record<string, SyncStatus>>({});
 const pullingMap = ref<Record<string, boolean>>({});
-const isLoading = ref(false);
-const error = ref('');
+const localError = ref('');
 
 // Group projects by organization
 const projectsByOrg = computed(() => {
-    const grouped: Record<string, { orgName: string; orgId: string; projects: Project[] }> = {};
+    const grouped: Record<string, { orgName: string; orgId: string; projects: ProjectShort[] }> = {};
+    const projectList = projects.value || [];
 
-    for (const project of projects.value) {
+    for (const project of projectList) {
         const orgId = project.organizationId;
         if (!grouped[orgId]) {
             grouped[orgId] = {
@@ -40,27 +46,22 @@ const projectsByOrg = computed(() => {
     return Object.values(grouped);
 });
 
-async function loadProjects() {
-    isLoading.value = true;
-    error.value = '';
+// Load pending rotations and sync statuses when projects load
+watch(projects, async (projectList) => {
+    if (!projectList) return;
+
+    // Load pending rotations
     try {
-        const [projectsData, rotationsData] = await Promise.all([
-            ProjectService.getProjects(),
-            KeyRotationService.getUserPendingRotations().catch(() => [])
-        ]);
-        projects.value = projectsData;
-        pendingRotations.value = rotationsData;
-
-        // Load sync statuses for linked projects
-        await loadSyncStatuses(projectsData);
-    } catch (err: any) {
-        error.value = 'Failed to load projects: ' + err.toString();
-    } finally {
-        isLoading.value = false;
+        pendingRotations.value = await KeyRotationService.getUserPendingRotations();
+    } catch {
+        pendingRotations.value = [];
     }
-}
 
-async function loadSyncStatuses(projectsList: Project[]) {
+    // Load sync statuses
+    await loadSyncStatuses(projectList);
+}, { immediate: true });
+
+async function loadSyncStatuses(projectsList: ProjectShort[]) {
     try {
         const mappings = await FileMappingService.getAllMappings();
         const projectMap = new Map(projectsList.map(p => [p.id, p]));
@@ -85,7 +86,8 @@ async function loadSyncStatuses(projectsList: Project[]) {
 }
 
 async function handlePull(projectId: string) {
-    const project = projects.value.find(p => p.id === projectId);
+    const projectList = projects.value || [];
+    const project = projectList.find(p => p.id === projectId);
     if (!project) return;
 
     pullingMap.value[projectId] = true;
@@ -108,7 +110,7 @@ async function handlePull(projectId: string) {
         syncStatusMap.value[projectId] = 'synced';
     } catch (e: any) {
         console.error('Pull failed', e);
-        error.value = `Pull failed for ${project.name}: ${e.message || e.toString()}`;
+        localError.value = `Pull failed for ${project.name}: ${e.message || e.toString()}`;
     } finally {
         pullingMap.value[projectId] = false;
     }
@@ -126,7 +128,12 @@ function navigateToOrganizations() {
     router.push('/organizations');
 }
 
-loadProjects();
+const errorMessage = computed(() => {
+    if (queryError.value) {
+        return queryError.value instanceof Error ? queryError.value.message : String(queryError.value);
+    }
+    return localError.value;
+});
 </script>
 
 <template>
@@ -179,16 +186,16 @@ loadProjects();
             </CardContent>
         </Card>
 
-        <div v-if="error" class="bg-destructive/15 text-destructive p-4 rounded-md">
-            {{ error }}
-        </div>
+        <ErrorState
+            v-if="errorMessage"
+            title="Failed to load projects"
+            :message="errorMessage"
+            :retry="() => { localError = ''; refetch(); }"
+        />
 
-        <div v-if="isLoading" class="flex flex-col items-center py-12 text-muted-foreground">
-            <Loader2 class="h-8 w-8 animate-spin mb-4" />
-            <p>Loading projects...</p>
-        </div>
+        <PageLoader v-else-if="isLoading" message="Loading projects..." />
 
-        <div v-else-if="projects.length === 0" class="bg-card rounded-lg border shadow-sm p-8 text-center">
+        <div v-else-if="!projects || projects.length === 0" class="bg-card rounded-lg border shadow-sm p-8 text-center">
             <div class="flex flex-col items-center gap-4">
                 <div class="p-4 bg-primary/10 rounded-full">
                     <Building2 class="w-8 h-8 text-primary" />

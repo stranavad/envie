@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Users, Plus, Shield, ChevronDown, ChevronRight, Loader2 } from 'lucide-vue-next';
-import { ProjectService, type ProjectDetail, type ProjectAccessData } from '@/services/project.service';
+import { Users, Plus, Shield, ChevronDown, ChevronRight } from 'lucide-vue-next';
+import { PageLoader } from '@/components/ui/spinner';
+import { ErrorState } from '@/components/ui/error-state';
+import { ProjectService, type ProjectDetail } from '@/services/project.service';
 import { TeamService } from '@/services/team.service';
 import { EncryptionService } from '@/services/encryption.service';
 import { useProjectDecryption } from '@/composables/useProjectDecryption';
+import { useProjectTeams, queryKeys } from '@/queries';
+import { useQueryClient } from '@tanstack/vue-query';
 
 const props = defineProps<{
     project: ProjectDetail;
@@ -16,14 +20,22 @@ const props = defineProps<{
 }>();
 
 const { decryptTeamKeyFromTeam } = useProjectDecryption();
+const queryClient = useQueryClient();
 
-const accessData = ref<ProjectAccessData | null>(null);
-const isLoading = ref(false);
-const error = ref('');
+// TanStack Query for project teams/access
+const { data: accessData, isLoading, error: queryError, refetch } = useProjectTeams(computed(() => props.project.id));
+
 const selectedTeamId = ref('');
 const isAddingTeam = ref(false);
 const addTeamError = ref('');
 const expandedTeams = ref<Set<string>>(new Set());
+
+const errorMessage = computed(() => {
+    if (queryError.value) {
+        return queryError.value instanceof Error ? queryError.value.message : String(queryError.value);
+    }
+    return '';
+});
 
 function toggleTeam(teamId: string) {
     if (expandedTeams.value.has(teamId)) {
@@ -32,18 +44,6 @@ function toggleTeam(teamId: string) {
         expandedTeams.value.add(teamId);
     }
     expandedTeams.value = new Set(expandedTeams.value);
-}
-
-async function loadAccessData() {
-    isLoading.value = true;
-    error.value = '';
-    try {
-        accessData.value = await ProjectService.getProjectTeams(props.project.id);
-    } catch (e: any) {
-        error.value = 'Failed to load access data: ' + (e.message || e);
-    } finally {
-        isLoading.value = false;
-    }
 }
 
 async function handleAddTeam() {
@@ -73,7 +73,7 @@ async function handleAddTeam() {
         });
 
         selectedTeamId.value = '';
-        await loadAccessData();
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectTeams(props.project.id) });
     } catch (e: any) {
         addTeamError.value = 'Failed to add team: ' + (e.message || e);
     } finally {
@@ -86,22 +86,18 @@ function getRoleBadgeClass(role: string): string {
     if (role === 'admin') return 'bg-secondary text-secondary-foreground';
     return 'bg-muted text-muted-foreground';
 }
-
-onMounted(() => {
-    loadAccessData();
-});
 </script>
 
 <template>
     <div class="space-y-6">
-        <div v-if="error" class="bg-destructive/15 text-destructive p-4 rounded-md">
-            {{ error }}
-        </div>
+        <ErrorState
+            v-if="errorMessage"
+            title="Failed to load access data"
+            :message="errorMessage"
+            :retry="refetch"
+        />
 
-        <div v-if="isLoading" class="flex flex-col items-center py-12 text-muted-foreground">
-            <Loader2 class="h-8 w-8 animate-spin mb-4" />
-            <p>Loading access information...</p>
-        </div>
+        <PageLoader v-else-if="isLoading" message="Loading access information..." />
 
         <div v-else-if="accessData" class="space-y-6">
             <!-- Teams with Access -->
@@ -133,7 +129,7 @@ onMounted(() => {
                                     <div>
                                         <div class="font-medium">{{ team.name }}</div>
                                         <div class="text-sm text-muted-foreground">
-                                            {{ team.memberCount }} member{{ team.memberCount !== 1 ? 's' : '' }}
+                                            {{ team.users.length }} member{{ team.users.length !== 1 ? 's' : '' }}
                                         </div>
                                     </div>
                                 </div>
@@ -246,7 +242,7 @@ onMounted(() => {
                                     :key="team.id"
                                     :value="team.id"
                                 >
-                                    {{ team.name }} ({{ team.memberCount }} members)
+                                    {{ team.name }}
                                 </SelectItem>
                             </SelectContent>
                         </Select>

@@ -1,36 +1,45 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { type ProjectDetail, ProjectService } from '@/services/project.service';
+import { type ProjectDetail as ProjectDetailType } from '@/services/project.service';
 import { Button } from '@/components/ui/button';
 import { TabNav } from '@/components/ui/tab-nav';
-import { ArrowLeft, Loader2, Upload, Download, AlertTriangle } from 'lucide-vue-next';
+import { ArrowLeft, Loader2, Upload, Download, AlertTriangle, GitCompare } from 'lucide-vue-next';
+import ProjectDiffDialog from '@/components/project/dialogs/ProjectDiffDialog.vue';
+import { PageLoader } from '@/components/ui/spinner';
+import { ErrorState } from '@/components/ui/error-state';
 import ProjectConfig from '@/components/project/ProjectConfig.vue';
 import ProjectSettings from '@/components/project/ProjectSettings.vue';
 import ProjectProviders from '@/components/project/ProjectProviders.vue';
 import ProjectAccess from '@/components/project/ProjectAccess.vue';
 import ProjectFiles from '@/components/project/ProjectFiles.vue';
+import ProjectTokens from '@/components/project/ProjectTokens.vue';
 import { FileMappingService, type SyncStatus } from '@/services/file-mapping.service';
 import { useProjectDecryption } from '@/composables/useProjectDecryption';
 import { useFileSync } from '@/composables/useFileSync';
+import { useProject } from '@/queries';
+import { useQueryClient } from '@tanstack/vue-query';
+import { queryKeys } from '@/queries/keys';
 
 const route = useRoute();
 const router = useRouter();
+const queryClient = useQueryClient();
 const projectId = route.params.id as string;
 
 // Composables
 const { isDecrypting, decryptionError, decryptProjectKeys } = useProjectDecryption();
 const { pullToLocal, readLocalItems } = useFileSync();
 
-const project = ref<ProjectDetail | null>(null);
-const isLoading = ref(false);
-const error = ref('');
+// TanStack Query for project
+const { data: project, isLoading, error: queryError, refetch } = useProject(projectId);
+
 const activeTab = ref('config');
 
 const tabs = [
     { key: 'config', label: 'Config' },
     { key: 'files', label: 'Files' },
     { key: 'access', label: 'Access' },
+    { key: 'tokens', label: 'Access Tokens' },
     { key: 'settings', label: 'Settings' },
     { key: 'providers', label: 'External providers' }
 ];
@@ -38,6 +47,10 @@ const tabs = [
 // Decryption state
 const decryptedKey = ref('');
 const decryptedTeamKey = ref('');
+
+// Diff dialog state
+const isDiffDialogOpen = ref(false);
+const configReloadKey = ref(0);
 
 // Local file sync mode state
 const localImportItems = ref<{ name: string; value: string }[] | null>(null);
@@ -48,33 +61,19 @@ const syncStatus = ref<SyncStatus>('not_linked');
 const isPulling = ref(false);
 const syncError = ref('');
 
-async function loadProject() {
-    isLoading.value = true;
-    error.value = '';
+// Watch for project changes and decrypt
+watch(project, async (projectData) => {
+    if (!projectData) return;
 
-    try {
-        project.value = await ProjectService.getProject(projectId);
-    } catch (err: any) {
-        error.value = 'Failed to load project: ' + err.toString();
-    } finally {
-        isLoading.value = false;
-    }
+    await decryptProjectKeyData(projectData);
+    await loadSyncStatus(projectData);
+}, { immediate: true });
 
-    if (!project.value) {
-        return;
-    }
-
-    await decryptProjectKeyData();
-    await loadSyncStatus();
-}
-
-async function loadSyncStatus() {
-    if (!project.value) return;
-
+async function loadSyncStatus(projectData: ProjectDetailType) {
     try {
         const result = await FileMappingService.checkSyncStatus(
             projectId,
-            project.value.configChecksum || ''
+            projectData.configChecksum || ''
         );
         syncStatus.value = result.status;
     } catch (e) {
@@ -82,15 +81,13 @@ async function loadSyncStatus() {
     }
 }
 
-async function decryptProjectKeyData() {
-    if (!project.value) return;
-
+async function decryptProjectKeyData(projectData: ProjectDetailType) {
     try {
         const { teamKey, projectKey } = await decryptProjectKeys({
-            teamId: project.value.teamId,
-            organizationId: project.value.organizationId,
-            encryptedTeamKey: project.value.encryptedTeamKey,
-            encryptedProjectKey: project.value.encryptedProjectKey,
+            teamId: projectData.teamId,
+            organizationId: projectData.organizationId,
+            encryptedTeamKey: projectData.encryptedTeamKey,
+            encryptedProjectKey: projectData.encryptedProjectKey,
         });
 
         decryptedTeamKey.value = teamKey;
@@ -100,9 +97,21 @@ async function decryptProjectKeyData() {
     }
 }
 
-function onProjectUpdated(updatedProject: ProjectDetail) {
-    project.value = updatedProject;
+function onProjectUpdated() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
 }
+
+function onDiffApplied() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
+    configReloadKey.value++;
+}
+
+const errorMessage = computed(() => {
+    if (queryError.value) {
+        return queryError.value instanceof Error ? queryError.value.message : String(queryError.value);
+    }
+    return '';
+});
 
 function handleReviewLocalChanges(items: { name: string; value: string }[]) {
     localImportItems.value = items;
@@ -113,18 +122,19 @@ function handleReviewLocalChanges(items: { name: string; value: string }[]) {
 function handleSyncComplete() {
     localImportItems.value = null;
     syncMode.value = false;
-    // Reload project to get updated checksum
-    loadProject();
+    // Invalidate project query to get updated checksum
+    queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
 }
 
 async function handlePull() {
-    if (!project.value || !decryptedKey.value) return;
+    const projectData = project.value;
+    if (!projectData || !decryptedKey.value) return;
 
     isPulling.value = true;
     syncError.value = '';
 
     try {
-        await pullToLocal(projectId, decryptedKey.value, project.value.configChecksum || '');
+        await pullToLocal(projectId, decryptedKey.value, projectData.configChecksum || '');
         syncStatus.value = 'synced';
     } catch (e: any) {
         console.error('Pull failed', e);
@@ -146,7 +156,9 @@ async function handlePushReview() {
     }
 }
 
-loadProject();
+function handleRotated() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
+}
 </script>
 
 <template>
@@ -162,14 +174,14 @@ loadProject();
             </Button>
         </div>
 
-        <div v-if="isLoading" class="flex flex-col items-center py-12 text-muted-foreground">
-            <Loader2 class="h-8 w-8 animate-spin mb-4" />
-            <p>Loading project...</p>
-        </div>
+        <PageLoader v-if="isLoading" message="Loading project..." />
 
-        <div v-else-if="error" class="bg-destructive/15 text-destructive p-4 rounded-md">
-            {{ error }}
-        </div>
+        <ErrorState
+            v-else-if="errorMessage"
+            title="Failed to load project"
+            :message="errorMessage"
+            :retry="refetch"
+        />
 
         <div v-else-if="project" class="space-y-6 min-w-0">
             <!-- Header -->
@@ -183,6 +195,10 @@ loadProject();
                         <span v-if="project.teamName">Team: {{ project.teamName }}</span>
                     </div>
                 </div>
+                <Button variant="outline" @click="isDiffDialogOpen = true" :disabled="!decryptedKey">
+                    <GitCompare class="w-4 h-4 mr-2" />
+                    Compare
+                </Button>
             </div>
 
             <div v-if="decryptionError" class="bg-destructive/15 text-destructive p-4 rounded-md">
@@ -252,6 +268,7 @@ loadProject();
 
             <div v-if="activeTab === 'config' && decryptedKey" class="space-y-6 min-w-0">
                 <ProjectConfig
+                    :key="configReloadKey"
                     :project="project"
                     :decrypted-key="decryptedKey"
                     :local-import-items="localImportItems"
@@ -268,13 +285,17 @@ loadProject();
                 <ProjectAccess :project="project" :decrypted-key="decryptedKey" />
             </div>
 
+            <div v-if="activeTab === 'tokens' && decryptedKey" class="space-y-6">
+                <ProjectTokens :project="project" :decrypted-key="decryptedKey" />
+            </div>
+
             <div v-if="activeTab === 'settings' && decryptedKey" class="space-y-6">
                 <ProjectSettings
                     :project="project"
                     :decrypted-key="decryptedKey"
                     :team-key="decryptedTeamKey"
                     @project-updated="onProjectUpdated"
-                    @rotated="loadProject"
+                    @rotated="handleRotated"
                     @review-local-changes="handleReviewLocalChanges"
                 />
             </div>
@@ -283,5 +304,14 @@ loadProject();
                 <ProjectProviders :project="project" :decrypted-key="decryptedKey" />
             </div>
         </div>
+
+        <!-- Compare Dialog -->
+        <ProjectDiffDialog
+            v-if="project && decryptedKey"
+            v-model:open="isDiffDialogOpen"
+            :project="project"
+            :decrypted-key="decryptedKey"
+            @applied="onDiffApplied"
+        />
     </div>
 </template>

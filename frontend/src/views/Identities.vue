@@ -1,35 +1,26 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { Loader2 } from 'lucide-vue-next';
-import { DeviceService, type Device } from '@/services/device.service';
+import { ref, computed } from 'vue';
+import { type Device } from '@/services/device.service';
 import { useVaultStore } from '@/stores/vault';
+import { PageLoader } from '@/components/ui/spinner';
+import { ErrorState } from '@/components/ui/error-state';
 import DeviceListItem from '@/components/identity/DeviceListItem.vue';
 import ApproveDeviceDialog from '@/components/identity/ApproveDeviceDialog.vue';
 import DeleteDeviceDialog from '@/components/identity/DeleteDeviceDialog.vue';
+import { useDevices, queryKeys } from '@/queries';
+import { useQueryClient } from '@tanstack/vue-query';
 
 const vault = useVaultStore();
+const queryClient = useQueryClient();
 
-const devices = ref<Device[]>([]);
-const isLoading = ref(false);
-const error = ref('');
+// TanStack Query for devices
+const { data: devices, isLoading, error: queryError, refetch } = useDevices();
 
 const isApprovalOpen = ref(false);
 const deviceToApprove = ref<Device | null>(null);
 
 const isDeleteOpen = ref(false);
 const deviceToDelete = ref<Device | null>(null);
-
-async function loadDevices() {
-    isLoading.value = true;
-    error.value = '';
-    try {
-        devices.value = await DeviceService.getDevices();
-    } catch (e: any) {
-        error.value = 'Error loading devices: ' + e.message;
-    } finally {
-        isLoading.value = false;
-    }
-}
 
 function openApproveDialog(device: Device) {
     deviceToApprove.value = device;
@@ -45,8 +36,15 @@ function isCurrentDevice(device: Device): boolean {
     return device.publicKey === vault.publicKey;
 }
 
-onMounted(() => {
-    loadDevices();
+function handleDeviceChanged() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+}
+
+const errorMessage = computed(() => {
+    if (queryError.value) {
+        return queryError.value instanceof Error ? queryError.value.message : String(queryError.value);
+    }
+    return '';
 });
 </script>
 
@@ -57,12 +55,16 @@ onMounted(() => {
             <p class="text-muted-foreground">Manage devices authorized to access your encrypted data.</p>
         </div>
 
-        <div v-if="error" class="bg-destructive/15 text-destructive p-4 rounded-md text-sm">
-            {{ error }}
-        </div>
+        <ErrorState
+            v-if="errorMessage"
+            title="Failed to load devices"
+            :message="errorMessage"
+            :retry="refetch"
+        />
 
-        <div class="bg-card rounded-lg border shadow-sm">
-            <!-- Header -->
+        <PageLoader v-else-if="isLoading" message="Loading devices..." />
+
+        <div v-else class="bg-card rounded-lg border shadow-sm">
             <div class="grid grid-cols-12 gap-4 p-4 border-b font-medium text-sm text-muted-foreground">
                 <div class="col-span-4">Device Name</div>
                 <div class="col-span-4">Public Key / Status</div>
@@ -70,16 +72,10 @@ onMounted(() => {
                 <div class="col-span-1 text-right">Actions</div>
             </div>
 
-            <div v-if="isLoading && devices.length === 0" class="flex flex-col items-center py-12 text-muted-foreground">
-                <Loader2 class="h-8 w-8 animate-spin mb-4" />
-                <p>Loading devices...</p>
-            </div>
-
-            <div v-else-if="!isLoading && devices.length === 0" class="p-8 text-center text-muted-foreground">
+            <div v-if="!devices || devices.length === 0" class="p-8 text-center text-muted-foreground">
                 No devices found (Odd, you should be one).
             </div>
 
-            <!-- List -->
             <div v-else class="divide-y divide-border">
                 <DeviceListItem
                     v-for="device in devices"
@@ -95,13 +91,13 @@ onMounted(() => {
         <ApproveDeviceDialog
             v-model:open="isApprovalOpen"
             :device="deviceToApprove"
-            @approved="loadDevices"
+            @approved="handleDeviceChanged"
         />
 
         <DeleteDeviceDialog
             v-model:open="isDeleteOpen"
             :device="deviceToDelete"
-            @deleted="loadDevices"
+            @deleted="handleDeviceChanged"
         />
     </div>
 </template>

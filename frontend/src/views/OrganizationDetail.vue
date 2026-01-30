@@ -1,23 +1,23 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useOrganizationStore } from '@/stores/organization';
 import { Button } from '@/components/ui/button';
 import { TabNav } from '@/components/ui/tab-nav';
-import { Users, ArrowLeft, Loader2 } from 'lucide-vue-next';
+import { ArrowLeft } from 'lucide-vue-next';
+import { PageLoader } from '@/components/ui/spinner';
+import { ErrorState } from '@/components/ui/error-state';
 import OrganizationProjects from '@/components/organization/OrganizationProjects.vue';
 import OrganizationTeams from '@/components/organization/OrganizationTeams.vue';
 import OrganizationUsers from '@/components/organization/OrganizationUsers.vue';
 import OrganizationSettings from '@/components/organization/OrganizationSettings.vue';
-import AddOrganizationMemberDialog from '@/components/organization/dialogs/AddOrganizationMemberDialog.vue';
-import { OrganizationService } from '@/services/organization.service';
+import { useOrganization, useOrganizationUsers, useTeams, queryKeys } from '@/queries';
+import { useQueryClient } from '@tanstack/vue-query';
 
 const router = useRouter();
 const route = useRoute();
-const store = useOrganizationStore();
+const queryClient = useQueryClient();
 const orgId = route.params.id as string;
 
-// Tab state
 const activeTab = ref('projects');
 const tabs = [
     { key: 'projects', label: 'Projects' },
@@ -26,60 +26,36 @@ const tabs = [
     { key: 'settings', label: 'Settings' }
 ];
 
-// Data
-const isLoading = ref(true);
-const teams = ref<any[]>([]);
-const users = ref<any[]>([]);
-const isAddMemberOpen = ref(false);
+// TanStack Queries
+const { data: organization, isLoading: orgLoading, error: orgError, refetch: refetchOrg } = useOrganization(orgId);
+const { data: users, isLoading: usersLoading } = useOrganizationUsers(orgId);
+const { data: teams, isLoading: teamsLoading } = useTeams(orgId);
 
-const currentMemberIds = computed(() => users.value.map(u => u.id));
-
-const organization = computed(() => store.currentOrganization);
+const isLoading = computed(() => orgLoading.value || usersLoading.value || teamsLoading.value);
 
 const canEditOrg = computed(() => {
     const role = organization.value?.role;
     return role === 'owner' || role === 'Owner' || role === 'admin';
 });
 
-onMounted(async () => {
-    try {
-        await store.getOrganization(orgId);
-        await Promise.all([
-            loadTeams(),
-            loadUsers()
-        ]);
-    } finally {
-        isLoading.value = false;
+function handleTeamsUpdated() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.teams(orgId) });
+}
+
+function handleNameUpdated() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.organization(orgId) });
+}
+
+function handleUsersUpdated() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.organizationUsers(orgId) });
+}
+
+const errorMessage = computed(() => {
+    if (orgError.value) {
+        return orgError.value instanceof Error ? orgError.value.message : String(orgError.value);
     }
+    return '';
 });
-
-async function loadTeams() {
-    try {
-        teams.value = await store.fetchTeams(orgId) || [];
-    } catch (e) {
-        console.error('Failed to load teams', e);
-    }
-}
-
-async function loadUsers() {
-    try {
-        users.value = await OrganizationService.getOrganizationUsers(orgId);
-    } catch (e) {
-        console.error('Failed to load users', e);
-    }
-}
-
-async function handleTeamsUpdated() {
-    await loadTeams();
-}
-
-async function handleNameUpdated() {
-    await store.getOrganization(orgId);
-}
-
-async function handleMemberAdded() {
-    await loadUsers();
-}
 </script>
 
 <template>
@@ -97,24 +73,23 @@ async function handleMemberAdded() {
         </div>
 
         <!-- Loading State -->
-        <div v-if="isLoading" class="flex items-center justify-center py-20">
-            <Loader2 class="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
+        <PageLoader v-if="isLoading" message="Loading organization..." />
+
+        <ErrorState
+            v-else-if="errorMessage"
+            title="Failed to load organization"
+            :message="errorMessage"
+            :retry="refetchOrg"
+        />
 
         <div v-else-if="organization" class="space-y-6">
             <!-- Header -->
-            <div class="flex items-center justify-between">
-                <div class="flex flex-col gap-1">
-                    <h1 class="text-3xl font-bold tracking-tight">{{ organization.name }}</h1>
-                    <div class="flex gap-4 text-sm text-muted-foreground font-mono">
-                        <span>ID: {{ orgId }}</span>
-                        <span>Role: {{ organization.role }}</span>
-                    </div>
+            <div class="flex flex-col gap-1">
+                <h1 class="text-3xl font-bold tracking-tight">{{ organization.name }}</h1>
+                <div class="flex gap-4 text-sm text-muted-foreground font-mono">
+                    <span>ID: {{ orgId }}</span>
+                    <span>Role: {{ organization.role }}</span>
                 </div>
-                <Button v-if="canEditOrg" variant="outline" size="sm" @click="isAddMemberOpen = true">
-                    <Users class="mr-2 h-4 w-4" />
-                    Invite Member
-                </Button>
             </div>
 
             <!-- Tabs -->
@@ -124,15 +99,15 @@ async function handleMemberAdded() {
             <div v-show="activeTab === 'projects'">
                 <OrganizationProjects
                     :organization-id="orgId"
-                    :teams="teams"
+                    :teams="teams || []"
                 />
             </div>
 
             <div v-show="activeTab === 'teams'">
                 <OrganizationTeams
                     :organization-id="orgId"
-                    :teams="teams"
-                    :users="users"
+                    :teams="teams || []"
+                    :users="users || []"
                     :can-edit="canEditOrg"
                     @teams-updated="handleTeamsUpdated"
                 />
@@ -141,9 +116,9 @@ async function handleMemberAdded() {
             <div v-show="activeTab === 'users'">
                 <OrganizationUsers
                     :organization-id="orgId"
-                    :users="users"
+                    :users="users || []"
                     :can-edit="canEditOrg"
-                    @users-updated="loadUsers"
+                    @users-updated="handleUsersUpdated"
                 />
             </div>
 
@@ -160,12 +135,5 @@ async function handleMemberAdded() {
         <div v-else class="text-center py-20 text-muted-foreground">
             Organization not found.
         </div>
-
-        <AddOrganizationMemberDialog
-            v-model:open="isAddMemberOpen"
-            :organization-id="orgId"
-            :current-member-ids="currentMemberIds"
-            @member-added="handleMemberAdded"
-        />
     </div>
 </template>

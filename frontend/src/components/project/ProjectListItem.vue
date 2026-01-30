@@ -2,16 +2,11 @@
 import { Folder, ArrowRight, Download, Upload, AlertTriangle, Loader2 } from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
 import type { SyncStatus } from '@/services/file-mapping.service';
+import { type ProjectShort } from "@/services/project.service";
 
-export interface ProjectListItemData {
-    id: string;
-    name: string;
-    teamName?: string;
-    updatedAt: string;
-}
 
 const props = defineProps<{
-    project: ProjectListItemData;
+    project: ProjectShort;
     syncStatus?: SyncStatus;
     isPulling?: boolean;
 }>();
@@ -58,8 +53,6 @@ function getSyncLabel(): string {
             <div>
                 <h3 class="font-medium leading-none">{{ project.name }}</h3>
                 <div class="flex items-center gap-2 mt-1">
-                    <span v-if="project.teamName" class="text-sm text-muted-foreground">{{ project.teamName }}</span>
-                    <span v-if="project.teamName" class="text-muted-foreground">·</span>
                     <span class="text-sm text-muted-foreground">
                         Updated {{ formatDate(project.updatedAt) }}
                     </span>

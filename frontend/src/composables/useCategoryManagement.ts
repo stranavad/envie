@@ -287,6 +287,58 @@ export function useCategoryManagement(configItems: Ref<ConfigItem[]>) {
         }
     }
 
+    // Auto-group uncategorized items by their prefix (first segment before underscore)
+    function autoGroupByPrefix() {
+        // Get uncategorized items
+        const uncategorized = configItems.value.filter(item => !item.category);
+
+        // Group by prefix (first segment before underscore, uppercase)
+        const prefixGroups = new Map<string, ConfigItem[]>();
+
+        uncategorized.forEach(item => {
+            const underscoreIndex = item.name.indexOf('_');
+            if (underscoreIndex === -1) {
+                // No underscore, skip this item
+                return;
+            }
+
+            const prefix = item.name.substring(0, underscoreIndex).toUpperCase();
+            if (!prefixGroups.has(prefix)) {
+                prefixGroups.set(prefix, []);
+            }
+            prefixGroups.get(prefix)!.push(item);
+        });
+
+        // Process groups with 2+ items
+        prefixGroups.forEach((items, prefix) => {
+            if (items.length < 2) {
+                return;
+            }
+
+            // Check if category already exists (case-insensitive match)
+            const existingCategory = categories.value.find(
+                cat => cat.toUpperCase() === prefix
+            );
+
+            const targetCategory = existingCategory || prefix;
+
+            // Create category if it doesn't exist
+            if (!existingCategory) {
+                addCategory(targetCategory);
+            }
+
+            // Assign items to the category
+            items.forEach(item => {
+                const idx = configItems.value.findIndex(i => i.id === item.id);
+                if (idx !== -1) {
+                    configItems.value[idx].category = targetCategory;
+                }
+            });
+        });
+
+        recalculatePositions();
+    }
+
     // Collapse categories by default when loading from server
     watch(categories, (newCategories) => {
         if (newCategories.length > 0 && !initialCategoriesLoaded.value) {
@@ -320,5 +372,6 @@ export function useCategoryManagement(configItems: Ref<ConfigItem[]>) {
         onCategoryItemsChange,
         onUncategorizedChange,
         moveItemToCategory,
+        autoGroupByPrefix,
     };
 }

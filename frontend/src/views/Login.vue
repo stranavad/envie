@@ -81,18 +81,14 @@ const codeInput = ref('');
 const isVerifying = ref(false);
 const error = ref('');
 
-// Validate linking code format: XXXX-XXXX-XXXX (12 hex chars with dashes)
 const isValidCode = computed(() => {
     const code = codeInput.value.trim();
     return /^[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}$/i.test(code);
 });
 
-// Auto-format the code as user types
 const formatCode = () => {
-    // Remove all non-hex characters
     let value = codeInput.value.replace(/[^a-f0-9]/gi, '').toLowerCase();
 
-    // Insert dashes after every 4 characters
     if (value.length > 4) {
         value = value.slice(0, 4) + '-' + value.slice(4);
     }
@@ -100,7 +96,6 @@ const formatCode = () => {
         value = value.slice(0, 9) + '-' + value.slice(9);
     }
 
-    // Limit to 14 characters (XXXX-XXXX-XXXX)
     codeInput.value = value.slice(0, 14);
 };
 
@@ -109,7 +104,6 @@ const handleLogin = async () => {
     error.value = '';
 
     try {
-        // Open OAuth flow (no public key needed - we'll register it after vault setup)
         await auth.login();
         showCodeInput.value = true;
     } catch (err: any) {
@@ -125,13 +119,11 @@ const handleVerify = async () => {
     isVerifying.value = true;
     error.value = '';
 
-    // Exchange linking code for tokens (no public key yet - we'll register it after vault setup)
     const success = await auth.exchangeLinkingCode(codeInput.value);
 
     if (success) {
         emit('success');
     } else {
-        // Show actual error from the store if available
         error.value = auth.lastExchangeError || "Invalid or expired linking code. Please try again.";
     }
     isVerifying.value = false;

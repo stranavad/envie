@@ -60,7 +60,7 @@ function handleImport() {
                     class="font-mono text-sm min-h-[200px]"
                 />
                 <div class="flex items-center space-x-2">
-                    <Switch id="markSensitive" v-model:checked="markNewAsSensitive" />
+                    <Switch id="markSensitive" v-model="markNewAsSensitive" />
                     <Label for="markSensitive">Mark new items as sensitive</Label>
                 </div>
             </div>

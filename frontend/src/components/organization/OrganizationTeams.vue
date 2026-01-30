@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { Button } from '@/components/ui/button';
+import { SectionHeader } from '@/components/ui/section-header';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
     Select,
@@ -22,7 +24,9 @@ import CreateTeamDialog from './dialogs/CreateTeamDialog.vue';
 import AddTeamMemberDialog, { type OrgUser } from './dialogs/AddTeamMemberDialog.vue';
 import { useOrganizationStore } from '@/stores/organization';
 import { EncryptionService } from '@/services/encryption.service';
-import { TeamService, type TeamMember } from '@/services/team.service';
+import { TeamService } from '@/services/team.service';
+import { useTeamMembers, queryKeys } from '@/queries';
+import { useQueryClient } from '@tanstack/vue-query';
 
 export interface Team {
     id: string;
@@ -45,6 +49,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useOrganizationStore();
+const queryClient = useQueryClient();
 const createTeamDialogRef = ref<InstanceType<typeof CreateTeamDialog>>();
 const addMemberDialogRef = ref<InstanceType<typeof AddTeamMemberDialog>>();
 
@@ -55,34 +60,22 @@ const addMemberTeamId = ref<string | null>(null);
 
 // Expandable team state
 const expandedTeamId = ref<string | null>(null);
-const teamMembers = ref<Record<string, TeamMember[]>>({});
-const isLoadingMembers = ref<Record<string, boolean>>({});
+
+// Use TanStack Query for team members when expanded
+const { data: expandedTeamMembers, isLoading: isLoadingExpandedMembers } = useTeamMembers(
+    computed(() => expandedTeamId.value || '')
+);
 
 const currentTeamMembers = computed(() => {
-    if (!addMemberTeamId.value) return [];
-    return teamMembers.value[addMemberTeamId.value] || [];
+    if (!addMemberTeamId.value || !expandedTeamMembers.value) return [];
+    return expandedTeamMembers.value;
 });
 
-async function toggleTeamExpanded(teamId: string) {
+function toggleTeamExpanded(teamId: string) {
     if (expandedTeamId.value === teamId) {
         expandedTeamId.value = null;
     } else {
         expandedTeamId.value = teamId;
-        if (!teamMembers.value[teamId]) {
-            await loadTeamMembers(teamId);
-        }
-    }
-}
-
-async function loadTeamMembers(teamId: string) {
-    isLoadingMembers.value[teamId] = true;
-    try {
-        teamMembers.value[teamId] = await TeamService.getTeamMembers(teamId);
-    } catch (e) {
-        console.error('Failed to load team members', e);
-        teamMembers.value[teamId] = [];
-    } finally {
-        isLoadingMembers.value[teamId] = false;
     }
 }
 
@@ -126,7 +119,7 @@ async function handleAddMember(userId: string, role: string) {
             role
         });
 
-        await loadTeamMembers(addMemberTeamId.value);
+        queryClient.invalidateQueries({ queryKey: queryKeys.teamMembers(addMemberTeamId.value) });
         addMemberDialogRef.value?.handleSuccess();
         emit('teams-updated');
     } catch (e: any) {
@@ -138,7 +131,7 @@ async function handleAddMember(userId: string, role: string) {
 async function handleRemoveMember(teamId: string, userId: string) {
     try {
         await TeamService.removeTeamMember(teamId, userId);
-        await loadTeamMembers(teamId);
+        queryClient.invalidateQueries({ queryKey: queryKeys.teamMembers(teamId) });
         emit('teams-updated');
     } catch (e: any) {
         console.error('Failed to remove member', e);
@@ -149,7 +142,7 @@ async function handleRemoveMember(teamId: string, userId: string) {
 async function handleUpdateMemberRole(teamId: string, userId: string, newRole: string) {
     try {
         await TeamService.updateTeamMember(teamId, userId, { role: newRole });
-        await loadTeamMembers(teamId);
+        queryClient.invalidateQueries({ queryKey: queryKeys.teamMembers(teamId) });
     } catch (e: any) {
         console.error('Failed to update role', e);
         alert(e.message || 'Failed to update role');
@@ -159,13 +152,12 @@ async function handleUpdateMemberRole(teamId: string, userId: string, newRole: s
 
 <template>
     <div class="space-y-4">
-        <div class="flex justify-between items-center">
-            <h3 class="text-lg font-medium">Teams</h3>
-            <Button size="sm" @click="isCreateTeamOpen = true">
-                <Plus class="mr-2 h-4 w-4" />
-                New Team
-            </Button>
-        </div>
+        <SectionHeader
+            title="Teams"
+            action-label="New Team"
+            :action-icon="Plus"
+            @action="isCreateTeamOpen = true"
+        />
 
         <div class="space-y-3">
             <div v-for="team in teams" :key="team.id" class="border rounded-lg bg-card overflow-hidden">
@@ -219,16 +211,16 @@ async function handleUpdateMemberRole(teamId: string, userId: string, newRole: s
 
                 <!-- Expanded Member List -->
                 <div v-if="expandedTeamId === team.id" class="border-t">
-                    <div v-if="isLoadingMembers[team.id]" class="flex items-center justify-center py-8 text-muted-foreground">
+                    <div v-if="isLoadingExpandedMembers" class="flex items-center justify-center py-8 text-muted-foreground">
                         <Loader2 class="h-5 w-5 animate-spin mr-2" />
                         Loading members...
                     </div>
-                    <div v-else-if="!teamMembers[team.id] || teamMembers[team.id].length === 0" class="py-6 text-center text-sm text-muted-foreground">
+                    <div v-else-if="!expandedTeamMembers || expandedTeamMembers.length === 0" class="py-6 text-center text-sm text-muted-foreground">
                         No members in this team yet.
                     </div>
                     <div v-else class="divide-y">
                         <div
-                            v-for="member in teamMembers[team.id]"
+                            v-for="member in expandedTeamMembers"
                             :key="member.userId"
                             class="flex items-center justify-between p-3 hover:bg-muted/30 transition-colors"
                         >
@@ -287,9 +279,12 @@ async function handleUpdateMemberRole(teamId: string, userId: string, newRole: s
                 </div>
             </div>
 
-            <div v-if="teams.length === 0" class="text-sm text-muted-foreground border rounded-lg p-8 text-center bg-muted/20">
-                No teams found. Create one to get started.
-            </div>
+            <EmptyState
+                v-if="teams.length === 0"
+                :icon="Users"
+                title="No teams found"
+                description="Create a team to get started."
+            />
         </div>
 
         <CreateTeamDialog

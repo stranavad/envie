@@ -7,9 +7,10 @@ import {Input} from '@/components/ui/input';
 import {Card, CardContent, CardDescription, CardHeader, CardTitle,} from '@/components/ui/card';
 import KeyRotation from './KeyRotation.vue';
 import PushPreviewDialog from './dialogs/PushPreviewDialog.vue';
+import CloneProjectDialog from './dialogs/CloneProjectDialog.vue';
 import {FileMappingService, type FileMapping, type SyncStatus} from '@/services/file-mapping.service';
 import {open} from '@tauri-apps/plugin-dialog';
-import {FileText, Link2, Unlink, Download, Upload, AlertCircle, CheckCircle2, RefreshCw, Loader2} from 'lucide-vue-next';
+import {FileText, Link2, Unlink, Download, Upload, AlertCircle, CheckCircle2, RefreshCw, Loader2, Copy} from 'lucide-vue-next';
 import {useConfigEncryption} from '@/composables/useConfigEncryption';
 import {useFileSync} from '@/composables/useFileSync';
 
@@ -34,6 +35,7 @@ const success = ref('');
 // General Settings State
 const editName = ref(props.project.name);
 const isSaving = ref(false);
+const isCloneDialogOpen = ref(false);
 
 // File Mapping State
 const fileMapping = ref<FileMapping | null>(null);
@@ -264,6 +266,22 @@ async function handleDelete() {
                 <div v-if="success" class="text-sm text-green-600 font-medium">
                     {{ success }}
                 </div>
+
+                <!-- Clone Project -->
+                <div class="pt-4 border-t">
+                    <div class="flex items-center justify-between">
+                        <div class="space-y-1">
+                            <div class="font-medium">Clone Project</div>
+                            <div class="text-sm text-muted-foreground">
+                                Create a copy of this project with selected configuration items.
+                            </div>
+                        </div>
+                        <Button variant="outline" @click="isCloneDialogOpen = true">
+                            <Copy class="w-4 h-4 mr-2" />
+                            Clone
+                        </Button>
+                    </div>
+                </div>
             </CardContent>
         </Card>
 
@@ -409,5 +427,12 @@ async function handleDelete() {
         :is-pushing="isPushing"
         @push="handleDirectPush"
         @review="handleReviewChanges"
+    />
+
+    <!-- Clone Project Dialog -->
+    <CloneProjectDialog
+        v-model:open="isCloneDialogOpen"
+        :project="project"
+        :decrypted-key="decryptedKey"
     />
 </template>

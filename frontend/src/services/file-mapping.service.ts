@@ -246,14 +246,27 @@ export class FileMappingService {
 
     /**
      * Parse .env file content into name-value pairs.
-     * Uses dotenv library for proper multiline value support.
+     * Uses dotenv library for parsing, then unescapes values.
      */
     static parseEnvContent(content: string): { name: string; value: string }[] {
         const parsed = parseDotenv(content);
         return Object.entries(parsed).map(([name, value]) => ({
             name,
-            value: value ?? '',
+            value: this.unescapeEnvValue(value ?? ''),
         }));
+    }
+
+    /**
+     * Unescape a value that was read from a .env file.
+     * The dotenv library preserves escape sequences, so we need to unescape them.
+     */
+    private static unescapeEnvValue(val: string): string {
+        // Unescape common escape sequences that formatEnvValue creates
+        return val
+            .replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\r')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\');
     }
 
     /**

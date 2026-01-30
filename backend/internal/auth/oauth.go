@@ -62,8 +62,11 @@ func GetGithubUser(code string) (*GithubUser, error) {
 	// Fetch email if not public
 	if user.Email == "" {
 		emailResp, err := client.Get("https://api.github.com/user/emails")
-		if err == nil && emailResp.StatusCode == http.StatusOK {
+		if err == nil {
 			defer emailResp.Body.Close()
+		}
+
+		if err == nil && emailResp.StatusCode == http.StatusOK {
 			var emails []struct {
 				Email    string `json:"email"`
 				Primary  bool   `json:"primary"`

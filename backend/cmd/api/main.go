@@ -155,5 +155,9 @@ func main() {
 		cli.GET("/projects/:id/config", handlers.GetCLIProjectConfig)
 	}
 
-	r.Run(":8080")
+	err := r.Run(":8080")
+	if err != nil {
+		log.Println("Failed to start HTPP server")
+		return
+	}
 }

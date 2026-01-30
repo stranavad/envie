@@ -19,11 +19,13 @@ func GetAuthUserID(c *gin.Context) (uuid.UUID, bool) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return uuid.UUID{}, false
 	}
+
 	uid, ok := userID.(uuid.UUID)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user ID in context"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user ID"})
 		return uuid.UUID{}, false
 	}
+	
 	return uid, true
 }
 

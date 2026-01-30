@@ -27,8 +27,11 @@ func checkStorageConfigured(c *gin.Context) bool {
 }
 
 func ListProjectFiles(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid := userID.(uuid.UUID)
+	uid, exists := GetAuthUserID(c)
+	if !exists {
+		return
+	}
+	
 	projectIDStr := c.Param("id")
 
 	projectID, err := uuid.Parse(projectIDStr)

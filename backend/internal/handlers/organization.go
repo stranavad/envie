@@ -87,63 +87,9 @@ func CreateOrganization(c *gin.Context) {
 }
 
 func GetOrganizations(c *gin.Context) {
-	uid, ok := GetAuthUserID(c)
+	userID, ok := GetAuthUserID(c)
 	if !ok {
 		return
-	}
-
-	type OrgWithRole struct {
-		models.Organization
-		Role string
-	}
-	var orgsWithRole []OrgWithRole
-	err := database.DB.Model(&models.Organization{}).
-		Select("organizations.*, organization_users.role").
-		Joins("JOIN organization_users ON organization_users.organization_id = organizations.id").
-		Where("organization_users.user_id = ?", uid).
-		Scan(&orgsWithRole).Error
-
-	if err != nil {
-		RespondInternalError(c, "Failed to fetch organizations")
-		return
-	}
-
-	if len(orgsWithRole) == 0 {
-		RespondOK(c, []any{})
-		return
-	}
-
-	orgIDs := make([]uuid.UUID, len(orgsWithRole))
-	for i, org := range orgsWithRole {
-		orgIDs[i] = org.ID
-	}
-
-	type CountResult struct {
-		OrganizationID uuid.UUID
-		Count          int64
-	}
-	var memberCounts []CountResult
-	database.DB.Model(&models.OrganizationUser{}).
-		Select("organization_id, COUNT(*) as count").
-		Where("organization_id IN ?", orgIDs).
-		Group("organization_id").
-		Scan(&memberCounts)
-
-	memberCountMap := make(map[uuid.UUID]int64)
-	for _, mc := range memberCounts {
-		memberCountMap[mc.OrganizationID] = mc.Count
-	}
-
-	var projectCounts []CountResult
-	database.DB.Model(&models.Project{}).
-		Select("organization_id, COUNT(*) as count").
-		Where("organization_id IN ?", orgIDs).
-		Group("organization_id").
-		Scan(&projectCounts)
-
-	projectCountMap := make(map[uuid.UUID]int64)
-	for _, pc := range projectCounts {
-		projectCountMap[pc.OrganizationID] = pc.Count
 	}
 
 	type OrganizationResponse struct {
@@ -153,14 +99,20 @@ func GetOrganizations(c *gin.Context) {
 		MemberCount  int64  `json:"memberCount"`
 	}
 
-	response := make([]OrganizationResponse, len(orgsWithRole))
-	for i, org := range orgsWithRole {
-		response[i] = OrganizationResponse{
-			Organization: org.Organization,
-			Role:         org.Role,
-			MemberCount:  memberCountMap[org.ID],
-			ProjectCount: projectCountMap[org.ID],
-		}
+	var response []OrganizationResponse
+	if err := database.DB.Raw(`
+		SELECT
+			organizations.*, organization_users.role as role,
+			COUNT(DISTINCT(projects.id)) as project_count,
+			COUNT(DISTINCT(organization_users.user_id)) as member_count
+		FROM organizations
+			  LEFT JOIN organization_users ON organization_users.organization_id = organizations.id
+			  LEFT JOIN projects ON projects.organization_id = organizations.id
+		WHERE organization_users.user_id = ?
+		GROUP BY organizations.id, organization_users.role
+	`, userID).Scan(&response).Error; err != nil {
+		RespondInternalError(c, "Failed to load organizations")
+		return
 	}
 
 	RespondOK(c, response)

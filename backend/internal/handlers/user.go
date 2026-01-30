@@ -7,54 +7,46 @@ import (
 	"envie-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 func GetMe(c *gin.Context) {
-	userID, exists := c.Get("user_id")
+	uid, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
-
-	uid := userID.(uuid.UUID)
 
 	var user models.User
 	if err := database.DB.First(&user, "id = ?", uid).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		RespondNotFound(c, "User not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, user)
+	RespondOK(c, user)
 }
 
-// set user public key for the first time
 func SetPublicKey(c *gin.Context) {
-	userID, exists := c.Get("user_id")
+	uid, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
-
-	uid := userID.(uuid.UUID)
 
 	var req struct {
 		PublicKey string `json:"publicKey" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Public key is required"})
+		RespondBadRequest(c, "Public key is required")
 		return
 	}
 
 	var user models.User
 	if err := database.DB.First(&user, "id = ?", uid).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		RespondNotFound(c, "User not found")
 		return
 	}
 
 	if user.PublicKey != nil && *user.PublicKey != "" {
-		c.JSON(http.StatusOK, gin.H{
+		RespondOK(c, gin.H{
 			"message":   "Public key already set",
 			"publicKey": *user.PublicKey,
 		})
@@ -63,11 +55,11 @@ func SetPublicKey(c *gin.Context) {
 
 	user.PublicKey = &req.PublicKey
 	if err := database.DB.Save(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save public key"})
+		RespondInternalError(c, "Failed to save public key")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	RespondOK(c, gin.H{
 		"message":   "Public key set successfully",
 		"publicKey": *user.PublicKey,
 	})
@@ -79,15 +71,11 @@ type RotateMasterKeyRequest struct {
 	TeamKeys     map[string]string `json:"teamKeys" binding:"required"`
 }
 
-// rotate the user master public key
 func RotateMasterKey(c *gin.Context) {
-	userID, exists := c.Get("user_id")
+	uid, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
-
-	uid := userID.(uuid.UUID)
 
 	var req RotateMasterKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -107,14 +95,14 @@ func RotateMasterKey(c *gin.Context) {
 	var user models.User
 	if err := tx.First(&user, "id = ?", uid).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		RespondNotFound(c, "User not found")
 		return
 	}
 
 	var identities []models.UserIdentity
 	if err := tx.Where("user_id = ? AND encrypted_master_key IS NOT NULL", uid).Find(&identities).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch identities"})
+		RespondInternalError(c, "Failed to fetch identities")
 		return
 	}
 
@@ -134,7 +122,7 @@ func RotateMasterKey(c *gin.Context) {
 	var teamUsers []models.TeamUser
 	if err := tx.Where("user_id = ?", uid).Find(&teamUsers).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch team memberships"})
+		RespondInternalError(c, "Failed to fetch team memberships")
 		return
 	}
 
@@ -153,7 +141,7 @@ func RotateMasterKey(c *gin.Context) {
 	user.MasterKeyVersion++
 	if err := tx.Save(&user).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update user"})
+		RespondInternalError(c, "Failed to update user")
 		return
 	}
 
@@ -163,7 +151,7 @@ func RotateMasterKey(c *gin.Context) {
 			Where("id = ?", identity.ID).
 			Update("encrypted_master_key", newEncryptedKey).Error; err != nil {
 			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update identity key"})
+			RespondInternalError(c, "Failed to update identity key")
 			return
 		}
 	}
@@ -174,20 +162,20 @@ func RotateMasterKey(c *gin.Context) {
 			Where("team_id = ? AND user_id = ?", tu.TeamID, uid).
 			Update("encrypted_team_key", newEncryptedTeamKey).Error; err != nil {
 			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update team key"})
+			RespondInternalError(c, "Failed to update team key")
 			return
 		}
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction"})
+		RespondInternalError(c, "Failed to commit transaction")
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":          "Master key rotated successfully",
-		"publicKey":        req.NewPublicKey,
-		"masterKeyVersion": user.MasterKeyVersion,
+		"message":           "Master key rotated successfully",
+		"publicKey":         req.NewPublicKey,
+		"masterKeyVersion":  user.MasterKeyVersion,
 		"identitiesUpdated": len(identities),
 		"teamsUpdated":      len(teamUsers),
 	})

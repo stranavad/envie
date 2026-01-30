@@ -8,7 +8,6 @@ import (
 	"envie-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 type RegisterDeviceRequest struct {
@@ -18,12 +17,10 @@ type RegisterDeviceRequest struct {
 }
 
 func RegisterDevice(c *gin.Context) {
-	userIdContext, exists := c.Get("user_id")
+	userID, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-	userID := userIdContext.(uuid.UUID)
 
 	var req RegisterDeviceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -31,9 +28,8 @@ func RegisterDevice(c *gin.Context) {
 		return
 	}
 
-
 	var existing models.UserIdentity
-	if result := database.DB.Preload("User").Where("user_id = ? AND public_key = ?", userID, req.PublicKey).First(&existing); result.Error == nil {
+	if err := database.DB.Preload("User").Where("user_id = ? AND public_key = ?", userID, req.PublicKey).First(&existing).Error; err == nil {
 		c.JSON(http.StatusOK, existing)
 		return
 	}
@@ -51,22 +47,20 @@ func RegisterDevice(c *gin.Context) {
 		return
 	}
 
-	database.DB.Preload("User").First(&device, "id = ?", device.ID)
+	database.DB.Preload("User").First(&device)
 
 	c.JSON(http.StatusCreated, device)
 }
 
 func GetDevices(c *gin.Context) {
-	userIdContext, exists := c.Get("user_id")
+	userID, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-	userID := userIdContext.(uuid.UUID)
 
 	var devices []models.UserIdentity
 	if err := database.DB.Preload("User").Where("user_id = ?", userID).Find(&devices).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch devices"})
+		RespondInternalError(c, "Failed to fetch devices")
 		return
 	}
 
@@ -74,16 +68,15 @@ func GetDevices(c *gin.Context) {
 }
 
 func DeleteDevice(c *gin.Context) {
-	userIdContext, exists := c.Get("user_id")
+	userID, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-	userID := userIdContext.(uuid.UUID)
+
 	deviceID := c.Param("id")
 
 	if err := database.DB.Where("id = ? AND user_id = ?", deviceID, userID).Delete(&models.UserIdentity{}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete device"})
+		RespondInternalError(c, "Failed to delete device")
 		return
 	}
 
@@ -91,15 +84,13 @@ func DeleteDevice(c *gin.Context) {
 }
 
 func DeleteAllDevices(c *gin.Context) {
-	userIdContext, exists := c.Get("user_id")
+	userID, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-	userID := userIdContext.(uuid.UUID)
 
 	if err := database.DB.Where("user_id = ?", userID).Delete(&models.UserIdentity{}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete devices"})
+		RespondInternalError(c, "Failed to delete devices")
 		return
 	}
 
@@ -111,12 +102,11 @@ type UpdateDeviceRequest struct {
 }
 
 func UpdateDevice(c *gin.Context) {
-	userIdContext, exists := c.Get("user_id")
+	userID, exists := GetAuthUserID(c)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-	userID := userIdContext.(uuid.UUID)
+
 	deviceID := c.Param("id")
 
 	var req UpdateDeviceRequest
@@ -127,7 +117,7 @@ func UpdateDevice(c *gin.Context) {
 
 	var device models.UserIdentity
 	if err := database.DB.Where("id = ? AND user_id = ?", deviceID, userID).First(&device).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Device not found"})
+		RespondNotFound(c, "Device not found")
 		return
 	}
 
@@ -136,11 +126,11 @@ func UpdateDevice(c *gin.Context) {
 	}
 
 	if err := database.DB.Save(&device).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update device"})
+		RespondInternalError(c, "Failed to update device")
 		return
 	}
 
 	database.DB.Preload("User").First(&device, "id = ?", device.ID)
 
-	c.JSON(http.StatusOK, device)
+	RespondOK(c, device)
 }

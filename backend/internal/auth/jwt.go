@@ -43,8 +43,8 @@ func GenerateLinkingCode() (string, error) {
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	hex := hex.EncodeToString(bytes)
-	return hex[0:4] + "-" + hex[4:8] + "-" + hex[8:12], nil
+	hexCode := hex.EncodeToString(bytes)
+	return hexCode[0:4] + "-" + hexCode[4:8] + "-" + hexCode[8:12], nil
 }
 
 func generateToken(userID uuid.UUID, tokenType TokenType, duration time.Duration) (string, error) {
@@ -78,17 +78,6 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	}
 
 	return nil, errors.New("invalid token")
-}
-
-func ValidateAccessToken(tokenString string) (*Claims, error) {
-	claims, err := ValidateToken(tokenString)
-	if err != nil {
-		return nil, err
-	}
-	if claims.TokenType != TokenTypeAccess {
-		return nil, errors.New("invalid token type: expected access token")
-	}
-	return claims, nil
 }
 
 func ValidateRefreshToken(tokenString string) (*Claims, error) {

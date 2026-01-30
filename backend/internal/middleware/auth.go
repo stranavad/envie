@@ -41,6 +41,7 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		c.Set("user_id", claims.UserID)
 
+		// TODO: This doesn't have to run in every request
 		var user models.User
 		if err := database.DB.Select("master_key_version").First(&user, "id = ?", claims.UserID).Error; err == nil {
 			c.Header("X-Master-Key-Version", strconv.Itoa(user.MasterKeyVersion))

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -16,32 +17,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
+	"gorm.io/gorm"
 )
 
-// Init oauth flow
 func AuthLogin(c *gin.Context) {
-	app := c.Query("app")
 	publicKey := c.Query("public_key")
-	log.Printf("AuthLogin: app param = '%s', publicKey provided", app)
 
-	state := "state"
-	if app == "envie" {
-		state = "app=envie"
-		if publicKey != "" {
-			state += "&pk=" + url.QueryEscape(publicKey)
-		}
+	if publicKey == "" {
+		RespondBadRequest(c, "Public key is required")
+		return
 	}
 
-	log.Printf("AuthLogin: generated state = '%s'", state)
+	state := "pk=" + url.QueryEscape(publicKey)
+
 	authURL := auth.OAuthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
 	c.Redirect(http.StatusTemporaryRedirect, authURL)
 }
 
-// HTML responses because its shown in da browser
 func AuthCallback(c *gin.Context) {
 	code := c.Query("code")
 	returnedState := c.Query("state")
-	log.Printf("AuthCallback: returnedCode = '%s', returnedState = '%s'", code, returnedState)
 
 	githubUser, err := auth.GetGithubUser(code)
 	if err != nil {
@@ -49,18 +44,29 @@ func AuthCallback(c *gin.Context) {
 		return
 	}
 
-	publicKey := ""
-	if len(returnedState) > 0 {
-		values, err := url.ParseQuery(returnedState)
-		if err == nil {
-			publicKey = values.Get("pk")
-		}
+	if len(returnedState) == 0 {
+		RespondUnauthorized(c, "Missing state")
+		return
+	}
+
+	stateValues, err := url.ParseQuery(returnedState)
+	if err != nil {
+		RespondBadRequest(c, "Invalid state")
+		return
+	}
+
+	publicKey := stateValues.Get("pk")
+	if publicKey == "" {
+		RespondBadRequest(c, "Missing PK state")
 	}
 
 	var user models.User
-	result := database.DB.Where("github_id = ?", githubUser.ID).First(&user)
+	if err := database.DB.Where("github_id = ?", githubUser.ID).First(&user).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			RespondInternalError(c, "Failed to check for user existence")
+			return
+		}
 
-	if result.Error != nil {
 		user = models.User{
 			Name:      githubUser.Name,
 			Email:     githubUser.Email,
@@ -107,7 +113,6 @@ func AuthCallback(c *gin.Context) {
 	}
 
 	if err := database.DB.Create(&linkingCodeRecord).Error; err != nil {
-		log.Printf("Failed to save linking code: %v", err)
 		c.HTML(http.StatusInternalServerError, "", renderErrorPage("Failed to save linking code: "+err.Error()))
 		return
 	}
@@ -117,7 +122,6 @@ func AuthCallback(c *gin.Context) {
 	c.Header("Content-Type", "text/html")
 	c.String(http.StatusOK, renderLinkingCodePage(strings.ToUpper(linkingCode), user.Name))
 }
-
 
 type ExchangeRequest struct {
 	Code            string `json:"code" binding:"required"`
@@ -139,30 +143,22 @@ type ExchangeResponse struct {
 	} `json:"user"`
 }
 
-
 func AuthExchange(c *gin.Context) {
 	var req ExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("AuthExchange: Invalid request: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		RespondBadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
 
 	code := strings.ToUpper(strings.TrimSpace(req.Code))
-	log.Printf("AuthExchange: Looking up code: %s", code)
 
 	var linkingCode models.LinkingCode
-	result := database.DB.Where("code = ?", code).First(&linkingCode)
-	if result.Error != nil {
-		log.Printf("AuthExchange: Code not found in database: %s, error: %v", code, result.Error)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired linking code"})
+	if err := database.DB.Where("code = ?", code).First(&linkingCode).Error; err != nil {
+		RespondUnauthorized(c, "Invalid or expired linking code")
 		return
 	}
 
-	log.Printf("AuthExchange: Found code for user %s, expires at %v, used at %v", linkingCode.UserID, linkingCode.ExpiresAt, linkingCode.UsedAt)
-
 	if !linkingCode.IsValid() {
-		log.Printf("AuthExchange: Code is not valid (expired or used)")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Linking code has expired or already been used"})
 		return
 	}
@@ -173,10 +169,9 @@ func AuthExchange(c *gin.Context) {
 
 	var user models.User
 	if err := database.DB.First(&user, "id = ?", linkingCode.UserID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User not found"})
+		RespondInternalError(c, "User not found")
 		return
 	}
-
 
 	// Update device LastActive if device public key provided
 	if req.DevicePublicKey != "" {

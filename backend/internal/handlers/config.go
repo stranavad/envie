@@ -138,6 +138,8 @@ func SyncConfigItems(c *gin.Context) {
 				item.Sensitive != foundExistingItem.Sensitive ||
 				item.Position != foundExistingItem.Position ||
 				strPtrDiffers(item.Category, foundExistingItem.Category) ||
+				strPtrDiffers(item.Description, foundExistingItem.Description) ||
+				timePtrDiffers(item.ExpiresAt, foundExistingItem.ExpiresAt) ||
 				strPtrDiffers(item.SecretManagerName, foundExistingItem.SecretManagerName) ||
 				strPtrDiffers(item.SecretManagerVersion, foundExistingItem.SecretManagerVersion) ||
 				timePtrDiffers(item.SecretManagerLastSyncAt, foundExistingItem.SecretManagerLastSyncAt) ||
@@ -152,6 +154,8 @@ func SyncConfigItems(c *gin.Context) {
 					Sensitive:               item.Sensitive,
 					Position:                item.Position,
 					Category:                item.Category,
+					Description:             item.Description,
+					ExpiresAt:               item.ExpiresAt,
 					SecretManagerConfigID:   item.SecretManagerConfigID,
 					SecretManagerName:       item.SecretManagerName,
 					SecretManagerVersion:    item.SecretManagerVersion,
@@ -170,6 +174,8 @@ func SyncConfigItems(c *gin.Context) {
 				Sensitive:               item.Sensitive,
 				Position:                item.Position,
 				Category:                item.Category,
+				Description:             item.Description,
+				ExpiresAt:               item.ExpiresAt,
 				SecretManagerConfigID:   item.SecretManagerConfigID,
 				SecretManagerName:       item.SecretManagerName,
 				SecretManagerVersion:    item.SecretManagerVersion,

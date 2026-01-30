@@ -8,13 +8,15 @@ import (
 )
 
 type ConfigItem struct {
-	ID         uuid.UUID `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	ProjectID  uuid.UUID `gorm:"type:uuid;index;not null" json:"projectId"`
-	Name       string    `gorm:"size:255;not null" json:"name"`
-	Value      string    `gorm:"type:text;not null" json:"value"`
-	Sensitive bool    `gorm:"default:false" json:"sensitive"`
-	Position  int     `gorm:"default:0" json:"position"`
-	Category  *string `gorm:"size:255" json:"category"`
+	ID          uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	ProjectID   uuid.UUID  `gorm:"type:uuid;index;not null" json:"projectId"`
+	Name        string     `gorm:"size:255;not null" json:"name"`
+	Value       string     `gorm:"type:text;not null" json:"value"`
+	Sensitive   bool       `gorm:"default:false" json:"sensitive"`
+	Position    int        `gorm:"default:0" json:"position"`
+	Category    *string    `gorm:"size:255" json:"category"`
+	Description *string    `gorm:"type:text" json:"description"`
+	ExpiresAt   *time.Time `gorm:"type:timestamp" json:"expiresAt"`
 
 	CreatedBy uuid.UUID `gorm:"type:uuid" json:"createdBy"`
 	UpdatedBy uuid.UUID `gorm:"type:uuid" json:"updatedBy"`

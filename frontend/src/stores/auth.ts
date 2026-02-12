@@ -11,6 +11,7 @@ interface User {
     email: string;
     avatarUrl: string;
     githubId: number;
+    googleId: string;
     publicKey: string | null;
     masterKeyVersion: number;
 }
@@ -50,8 +51,9 @@ export const useAuthStore = defineStore('auth', () => {
     // Legacy alias for backwards compatibility
     const token = computed(() => accessToken.value);
 
-    async function login() {
-        await openUrl(`${config.backendUrl}/auth/login?app=envie`);
+    async function login(provider: 'github' | 'google' = 'github') {
+        const path = provider === 'google' ? '/auth/login/google' : '/auth/login';
+        await openUrl(`${config.backendUrl}${path}?app=envie`);
     }
 
     /**

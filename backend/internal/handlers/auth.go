@@ -24,6 +24,11 @@ func AuthLogin(c *gin.Context) {
 	c.Redirect(http.StatusTemporaryRedirect, authURL)
 }
 
+func AuthLoginGoogle(c *gin.Context) {
+	authURL := auth.GoogleOAuthConfig.AuthCodeURL("", oauth2.AccessTypeOffline)
+	c.Redirect(http.StatusTemporaryRedirect, authURL)
+}
+
 func AuthCallback(c *gin.Context) {
 	code := c.Query("code")
 
@@ -96,6 +101,85 @@ func AuthCallback(c *gin.Context) {
 	c.String(http.StatusOK, renderLinkingCodePage(strings.ToUpper(linkingCode), user.Name))
 }
 
+func AuthCallbackGoogle(c *gin.Context) {
+	code := c.Query("code")
+
+	googleUser, err := auth.GetGoogleUser(code)
+	if err != nil {
+		c.HTML(http.StatusInternalServerError, "", renderErrorPage("Authentication failed: "+err.Error()))
+		return
+	}
+
+	var user models.User
+	// First try to find by Google ID
+	err = database.DB.Where("google_id = ?", googleUser.ID).First(&user).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			RespondInternalError(c, "Failed to check for user existence")
+			return
+		}
+
+		// Not found by Google ID — try by email (account linking)
+		err = database.DB.Where("email = ?", googleUser.Email).First(&user).Error
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				RespondInternalError(c, "Failed to check for user existence")
+				return
+			}
+
+			// Brand new user
+			user = models.User{
+				Name:      googleUser.Name,
+				Email:     googleUser.Email,
+				AvatarURL: googleUser.AvatarURL,
+				GoogleID:  googleUser.ID,
+				PublicKey: nil,
+			}
+
+			if err := database.DB.Create(&user).Error; err != nil {
+				c.HTML(http.StatusInternalServerError, "", renderErrorPage("Failed to create user: "+err.Error()))
+				return
+			}
+		} else {
+			// Existing user found by email — link Google ID
+			user.GoogleID = googleUser.ID
+			database.DB.Save(&user)
+		}
+	} else {
+		// Found by Google ID — update profile
+		user.Name = googleUser.Name
+		user.Email = googleUser.Email
+		user.AvatarURL = googleUser.AvatarURL
+		database.DB.Save(&user)
+	}
+
+	// Clean old linking codes
+	database.DB.Where("user_id = ? AND (used_at IS NOT NULL OR expires_at < ?)", user.ID, time.Now()).
+		Delete(&models.LinkingCode{})
+
+	linkingCode, err := auth.GenerateLinkingCode()
+	if err != nil {
+		c.HTML(http.StatusInternalServerError, "", renderErrorPage("Failed to generate linking code"))
+		return
+	}
+
+	linkingCodeRecord := models.LinkingCode{
+		Code:      strings.ToUpper(linkingCode),
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(auth.LinkingCodeDuration),
+	}
+
+	if err := database.DB.Create(&linkingCodeRecord).Error; err != nil {
+		c.HTML(http.StatusInternalServerError, "", renderErrorPage("Failed to save linking code: "+err.Error()))
+		return
+	}
+
+	log.Printf("Created linking code for user %s: %s", user.ID, strings.ToUpper(linkingCode))
+
+	c.Header("Content-Type", "text/html")
+	c.String(http.StatusOK, renderLinkingCodePage(strings.ToUpper(linkingCode), user.Name))
+}
+
 type ExchangeRequest struct {
 	Code            string `json:"code" binding:"required"`
 	DevicePublicKey string `json:"devicePublicKey"`
@@ -111,6 +195,7 @@ type ExchangeResponse struct {
 		Email            string    `json:"email"`
 		AvatarURL        string    `json:"avatarUrl"`
 		GithubID         int64     `json:"githubId"`
+		GoogleID         string    `json:"googleId"`
 		PublicKey        *string   `json:"publicKey"`
 		MasterKeyVersion int       `json:"masterKeyVersion"`
 	} `json:"user"`
@@ -175,6 +260,7 @@ func AuthExchange(c *gin.Context) {
 	response.User.Email = user.Email
 	response.User.AvatarURL = user.AvatarURL
 	response.User.GithubID = user.GithubID
+	response.User.GoogleID = user.GoogleID
 	response.User.PublicKey = user.PublicKey
 	response.User.MasterKeyVersion = user.MasterKeyVersion
 

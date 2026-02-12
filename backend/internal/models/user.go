@@ -13,6 +13,7 @@ type User struct {
 	Email            string         `gorm:"uniqueIndex;size:255;not null" json:"email"`
 	AvatarURL        string         `gorm:"size:1024" json:"avatarUrl"`
 	GithubID         int64          `gorm:"uniqueIndex" json:"githubId"`
+	GoogleID         string         `gorm:"uniqueIndex" json:"googleId"`
 	PublicKey        *string        `gorm:"type:text" json:"publicKey"`
 	MasterKeyVersion int            `gorm:"default:1" json:"masterKeyVersion"`
 	CreatedAt        time.Time      `json:"createdAt"`

@@ -47,6 +47,8 @@ func main() {
 	// Public routes
 	r.GET("/auth/login", handlers.AuthLogin)
 	r.GET("/auth/callback", handlers.AuthCallback)
+	r.GET("/auth/login/google", handlers.AuthLoginGoogle)
+	r.GET("/auth/callback/google", handlers.AuthCallbackGoogle)
 	r.POST("/auth/exchange", handlers.AuthExchange)
 	r.POST("/auth/refresh", handlers.AuthRefresh)
 	r.GET("/ping", func(c *gin.Context) {

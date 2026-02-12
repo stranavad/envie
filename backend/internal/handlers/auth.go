@@ -26,7 +26,6 @@ func AuthLogin(c *gin.Context) {
 
 func AuthCallback(c *gin.Context) {
 	code := c.Query("code")
-	returnedState := c.Query("state")
 
 	githubUser, err := auth.GetGithubUser(code)
 	if err != nil {
@@ -34,10 +33,6 @@ func AuthCallback(c *gin.Context) {
 		return
 	}
 
-	if len(returnedState) == 0 {
-		RespondUnauthorized(c, "Missing state")
-		return
-	}
 
 	var user models.User
 	if err := database.DB.Where("github_id = ?", githubUser.ID).First(&user).Error; err != nil {
